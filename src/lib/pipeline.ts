@@ -6,7 +6,7 @@ import { getSetting } from "./settings";
 import { getRunDir } from "./run-paths";
 import { pLimit } from "./plimit";
 import { splitScript, type Scene } from "./services/scene-split";
-import { synthesizeScene } from "./services/tts";
+import { synthesizeScene, resolveTtsProvider } from "./services/tts";
 import { synthesizeAndAlign, type SceneAudioRange } from "./services/tts-align";
 import { animateScene, pickPhotoScenes, type AssetMode } from "./services/img2vid";
 import { pexelsPreflight } from "./services/stock-footage";
@@ -80,6 +80,12 @@ export async function runPipeline(runId: string, script: string) {
     const mixMode = (getSetting("SCENE_MIX_MODE") || "random") as "random" | "alternating";
     const photoScenes = pickPhotoScenes(scenes, photoRatio, mixMode);
 
+    log(
+      runId,
+      "info",
+      `Voice engine: ${resolveTtsProvider()} · voice ${getSetting("TTS_VOICE_ID") || "(not set)"} · per-scene mode`,
+      { stage: "tts" }
+    );
     log(
       runId,
       "info",
@@ -198,6 +204,12 @@ async function runSingleShot(
     "info",
     "Voice mode: single-shot — one continuous voiceover + Whisper word-alignment to scene boundaries",
     { stage: "pipeline" }
+  );
+  log(
+    runId,
+    "info",
+    `Voice engine: ${resolveTtsProvider()} · voice ${getSetting("TTS_VOICE_ID") || "(not set)"}`,
+    { stage: "tts" }
   );
 
   // 1. One continuous voiceover for the whole script + Whisper word-alignment.

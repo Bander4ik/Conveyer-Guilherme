@@ -33,34 +33,35 @@ type TtsOptions = Record<string, never>;
  *     double-slow the voice).
  * Callers must therefore NOT apply atempo again on top of dispatchTts output.
  */
+/**
+ * The voice engine that will ACTUALLY be used for this run. It's the
+ * TTS_PROVIDER setting, except: if the selected engine has no key configured
+ * but the OTHER one does, we use the configured one (auto-fallback). So
+ * whichever single voice key you paste (ai33pro OR 69labs), narration works.
+ * If both keys are set, TTS_PROVIDER is respected. Exported so the pipeline can
+ * show the user which engine is live.
+ */
+export function resolveTtsProvider(): "ai33pro" | "69labs" {
+  const selected = (getSetting("TTS_PROVIDER") || "ai33pro").toLowerCase();
+  const hasAi33 = getSetting("AI33PRO_API_KEY").trim().length > 0;
+  const has69 = getSetting("LABS69_API_KEY").trim().length > 0;
+  if (selected === "69labs") {
+    return has69 || !hasAi33 ? "69labs" : "ai33pro";
+  }
+  return hasAi33 || !has69 ? "ai33pro" : "69labs";
+}
+
 async function dispatchTts(
   runId: string,
   text: string,
   outPath: string,
   _options: TtsOptions = {}
 ): Promise<void> {
-  let provider = (getSetting("TTS_PROVIDER") || "ai33pro").toLowerCase();
-
-  // Auto-fallback: if the selected engine has NO key configured but the OTHER
-  // engine does, use the one that's actually set up. So whichever key you paste
-  // (ai33pro OR 69labs) the voiceover just works, without also having to flip
-  // TTS_PROVIDER. (If both keys are set, TTS_PROVIDER is respected as-is.)
-  const hasAi33 = getSetting("AI33PRO_API_KEY").trim().length > 0;
-  const has69 = getSetting("LABS69_API_KEY").trim().length > 0;
-  if (provider === "ai33pro" && !hasAi33 && has69) {
-    log(runId, "warn", "AI33PRO_API_KEY not set — using 69labs instead (its key is present)", { stage: "tts" });
-    provider = "69labs";
-  } else if (provider === "69labs" && !has69 && hasAi33) {
-    log(runId, "warn", "LABS69_API_KEY not set — using ai33pro instead (its key is present)", { stage: "tts" });
-    provider = "ai33pro";
-  }
-
-  if (provider === "ai33pro") {
-    await ai33proTts(runId, text, outPath);
-  } else if (provider === "69labs") {
+  const provider = resolveTtsProvider();
+  if (provider === "69labs") {
     await labs69Tts(runId, text, outPath);
   } else {
-    throw new Error(`Unknown TTS provider: ${provider} (expected "ai33pro" or "69labs")`);
+    await ai33proTts(runId, text, outPath);
   }
 }
 
@@ -181,7 +182,7 @@ export async function synthesizeScene(
   outDir: string,
   options: TtsOptions = {}
 ): Promise<TtsResult> {
-  const provider = (getSetting("TTS_PROVIDER") || "ai33pro").toLowerCase();
+  const provider = resolveTtsProvider();
   const fileName = `scene_${String(scene.index).padStart(3, "0")}.mp3`;
   const filePath = path.join(outDir, fileName);
 

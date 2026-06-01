@@ -24,7 +24,7 @@ export interface Group {
 export const ALL_GROUPS: Group[] = [
   {
     title: "Required API Keys",
-    subtitle: "The bare minimum needed to run the pipeline.",
+    subtitle: "The bare minimum to run the pipeline. (Your VOICE key — ai33.pro or 69labs — lives in the Voice Over section below; set whichever one you have.)",
     required: true,
     fields: [
       {
@@ -39,12 +39,6 @@ export const ALL_GROUPS: Group[] = [
         examples: "Single key: pasted on one line  ·  Multiple keys: one per line (paste, Enter, paste, Enter, ...)",
         required: true,
         multiline: true,
-      },
-      {
-        key: "AI33PRO_API_KEY",
-        desc: "ai33.pro API key — used for ElevenLabs-voice TTS through their cheaper proxy. Header name is `xi-api-key` (ElevenLabs-compatible).",
-        examples: "Get it from your ai33.pro dashboard → API Key",
-        required: true,
       },
       {
         key: "GROQ_API_KEY",
@@ -83,19 +77,25 @@ export const ALL_GROUPS: Group[] = [
     ],
   },
   {
-    title: "Voice Over (ai33pro / ElevenLabs)",
-    subtitle: "Narration uses ElevenLabs voices. By default through the ai33.pro proxy; you can switch the gateway to 69labs below. Same voice catalog either way.",
+    title: "Voice Over — engine: ai33.pro OR 69labs (ElevenLabs voices)",
+    subtitle: "Pick the voice engine and paste its key here. ai33.pro and 69labs serve the SAME ElevenLabs voices — they're just two gateways, so use whichever you have. The run log prints which engine is actually live (e.g. \"Voice engine: 69labs\") so you always see what's being used.",
     fields: [
       {
         key: "TTS_PROVIDER",
-        label: "Voice engine",
-        desc: "Which service actually generates the voice. Both use the SAME ElevenLabs voice you pick below — they're just two different gateways, so you can pick whichever you have credits on.\n\n• 'ai33pro' (default) — the current setup, via the ai33.pro proxy. Uses your AI33PRO_API_KEY.\n\n• '69labs' — the same ElevenLabs voice through the 69labs gateway instead. Needs the LABS69_API_KEY field below. Handy if your ai33.pro credits run low or 69labs gives you a better rate.\n\nYour voice id, model and speed settings below apply to BOTH — no need to change them when you switch.",
+        label: "Voice engine — ai33.pro or 69labs",
+        desc: "Which service generates the voice. Both use the SAME ElevenLabs voice you pick below.\n\n• 'ai33pro' (default) — via the ai33.pro proxy. Uses the ai33.pro key below.\n\n• '69labs' — the same ElevenLabs voice through the 69labs gateway. Uses the 69labs key below.\n\nVoice id / model / speed apply to BOTH — no need to change them when you switch. SMART: you don't even have to set this exactly right — if you only fill ONE of the two keys below, the app uses that engine automatically. Whichever engine ends up active is printed in the run log.",
         examples: "ai33pro (default)  ·  69labs",
       },
       {
+        key: "AI33PRO_API_KEY",
+        label: "ai33.pro key (for the ai33pro engine)",
+        desc: "ai33.pro API key — cheaper ElevenLabs-voice proxy. Fill this if Voice engine = ai33pro. Set at least one of this / the 69labs key below.",
+        examples: "Get it from your ai33.pro dashboard → API Key",
+      },
+      {
         key: "LABS69_API_KEY",
-        label: "69labs API key",
-        desc: "ONLY needed if Voice engine above is set to '69labs'. Leave empty when using ai33pro. The key starts with `vk_` — grab it from your 69labs dashboard (API section).",
+        label: "69labs key (for the 69labs engine)",
+        desc: "69labs API key — same ElevenLabs voices through the 69labs gateway. Fill this if Voice engine = 69labs. The key starts with `vk_`. Set at least one of this / the ai33.pro key above.",
         examples: "vk_xxxxxxxxxxxxxxxx — from https://69labs.vip dashboard → API",
       },
       {
