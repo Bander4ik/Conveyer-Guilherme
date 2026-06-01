@@ -84,8 +84,20 @@ export const ALL_GROUPS: Group[] = [
   },
   {
     title: "Voice Over (ai33pro / ElevenLabs)",
-    subtitle: "Narration uses ElevenLabs voices via the ai33.pro proxy. Same voice catalog as ElevenLabs, much cheaper credits.",
+    subtitle: "Narration uses ElevenLabs voices. By default through the ai33.pro proxy; you can switch the gateway to 69labs below. Same voice catalog either way.",
     fields: [
+      {
+        key: "TTS_PROVIDER",
+        label: "Voice engine",
+        desc: "Which service actually generates the voice. Both use the SAME ElevenLabs voice you pick below — they're just two different gateways, so you can pick whichever you have credits on.\n\n• 'ai33pro' (default) — the current setup, via the ai33.pro proxy. Uses your AI33PRO_API_KEY.\n\n• '69labs' — the same ElevenLabs voice through the 69labs gateway instead. Needs the LABS69_API_KEY field below. Handy if your ai33.pro credits run low or 69labs gives you a better rate.\n\nYour voice id, model and speed settings below apply to BOTH — no need to change them when you switch.",
+        examples: "ai33pro (default)  ·  69labs",
+      },
+      {
+        key: "LABS69_API_KEY",
+        label: "69labs API key",
+        desc: "ONLY needed if Voice engine above is set to '69labs'. Leave empty when using ai33pro. The key starts with `vk_` — grab it from your 69labs dashboard (API section).",
+        examples: "vk_xxxxxxxxxxxxxxxx — from https://69labs.vip dashboard → API",
+      },
       {
         key: "TTS_MODE",
         label: "Voice mode",

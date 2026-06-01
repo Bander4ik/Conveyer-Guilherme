@@ -20,7 +20,10 @@ export const SETTING_KEYS = [
   "SCENE_SPLIT_MODEL",       // e.g. gemini-flash-latest
 
   // ── Text-to-Speech (ai33.pro / ElevenLabs voices) ─────────────────
-  "TTS_VOICE_ID",            // ElevenLabs voice id (path-segment in ai33pro URL)
+  "TTS_PROVIDER",            // voiceover engine: ai33pro (default) | 69labs. Both serve the SAME ElevenLabs voices; 69labs is just an alternate gateway.
+  "LABS69_API_KEY",          // 69labs API key (vk_...). Only needed when TTS_PROVIDER = 69labs.
+  "TTS_VOICE_PROVIDER",      // 69labs path only: elevenlabs (default) | edgetts | voice-clone. We use elevenlabs so the voice matches ai33pro.
+  "TTS_VOICE_ID",            // ElevenLabs voice id (path-segment in ai33pro URL; also used by 69labs-elevenlabs)
   "TTS_MODEL",               // ElevenLabs model, e.g. eleven_multilingual_v2
   "TTS_SPEED",               // 0.5–2.0 playback tempo. <1 = slower/calmer voice (applied via ffmpeg, pitch-preserving)
   "TTS_MODE",                // single-shot (default) | per-scene. Single-shot synthesizes ONE continuous voiceover for the whole script then aligns scene boundaries via Groq Whisper word-timestamps — fixes mid-sentence pauses at scene boundaries.
@@ -120,6 +123,12 @@ export const DEFAULTS: Record<SettingKey, string> = {
 
   // TTS — ai33.pro with ElevenLabs voices. Default voice left empty so the
   // user picks one in /settings (any ElevenLabs voice id works).
+  // Voiceover engine: ai33pro by default. Switch to 69labs to route the SAME
+  // ElevenLabs voices through the 69labs gateway (needs LABS69_API_KEY).
+  TTS_PROVIDER: "ai33pro",
+  LABS69_API_KEY: "",
+  // 69labs path only — elevenlabs keeps the voice identical to ai33pro.
+  TTS_VOICE_PROVIDER: "elevenlabs",
   TTS_VOICE_ID: "",
   TTS_MODEL: "eleven_multilingual_v2",
   TTS_SPEED: "1.0",

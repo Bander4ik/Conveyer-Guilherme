@@ -234,11 +234,15 @@ Always set both to match. For normal videos, the defaults (`1920x1080` + `landsc
 ### Voice Over
 | Setting | What it does | Default |
 |---|---|---|
+| `TTS_PROVIDER` | Which voice engine. `ai33pro` (default) or `69labs` — **both use the same ElevenLabs voices**, 69labs is just an alternate gateway. Switch to `69labs` if you have a 69labs key / prefer it. | ai33pro |
+| `LABS69_API_KEY` | Your 69labs key (starts with `vk_`). **Only needed if `TTS_PROVIDER = 69labs`.** Get it from your 69labs dashboard. | — |
 | `TTS_MODE` | `single-shot` (smooth, recommended, uses Groq) or `per-scene` (older, small pauses). | single-shot |
-| `TTS_VOICE_ID` | ElevenLabs voice ID. | — |
+| `TTS_VOICE_ID` | ElevenLabs voice ID (works for both providers). | — |
 | `TTS_MODEL` | `eleven_multilingual_v2` (best quality) or `eleven_turbo_v2_5` (faster/cheaper). | eleven_multilingual_v2 |
 | `TTS_SPEED` | Narration speed. `1.0` normal, `0.9` calmer. Pitch stays natural. | 1.0 |
 | `MAX_CLIP_SECONDS` | Max length of one b-roll clip in smooth mode; longer scenes get several clips. `0` = one clip per scene. | 7 |
+
+> **Switching the voice engine:** the same `TTS_VOICE_ID` (an ElevenLabs voice) works on both `ai33pro` and `69labs`, so you can flip `TTS_PROVIDER` without changing your voice. Speed is handled correctly either way.
 
 ### Stock footage (Pexels)
 | Setting | What it does | Default |

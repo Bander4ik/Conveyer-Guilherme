@@ -5,6 +5,7 @@ import { getSetting } from "../settings";
 import { log } from "../logger";
 import type { Scene } from "./scene-split";
 import { createTtsTask, pollTask, downloadTask } from "./ai33pro";
+import { createTtsJob, pollJob, downloadJob } from "./labs69";
 import { probeDurationSafe, applyAudioTempo, resolveFfmpegBinary } from "./video-assemble";
 
 export interface TtsResult {
@@ -14,18 +15,47 @@ export interface TtsResult {
   durationSec: number;
 }
 
-/**
- * Synthesizes one scene's narration via ai33.pro (ElevenLabs voices).
- * Async task pattern: POST → poll task_id → download audio.
- */
-export async function synthesizeScene(
-  runId: string,
-  scene: Scene,
-  outDir: string
-): Promise<TtsResult> {
-  const fileName = `scene_${String(scene.index).padStart(3, "0")}.mp3`;
-  const filePath = path.join(outDir, fileName);
+/** No per-call overrides today (Guilherme has one global voice). Kept as a typed
+ *  options bag so a future per-scene/per-channel override is a one-line change. */
+type TtsOptions = Record<string, never>;
 
+/**
+ * Routes `text` to the currently-configured TTS provider, writing the audio to
+ * `outPath`. Shared by per-scene (synthesizeScene) and single-shot
+ * (synthesizeFullScript) so the provider switch lives in ONE place.
+ *
+ * IMPORTANT — voice speed (TTS_SPEED) is applied HERE, exactly once, and the
+ * mechanism differs per provider:
+ *   • ai33pro → ElevenLabs-direct has no speed knob on this proxy, so we apply
+ *     TTS_SPEED as an ffmpeg atempo POST-PROCESS on the written file.
+ *   • 69labs  → ElevenLabs exposes a NATIVE voiceSettings.speed, so we pass
+ *     TTS_SPEED in the request and DO NOT run atempo (doing both would
+ *     double-slow the voice).
+ * Callers must therefore NOT apply atempo again on top of dispatchTts output.
+ */
+async function dispatchTts(
+  runId: string,
+  text: string,
+  outPath: string,
+  _options: TtsOptions = {}
+): Promise<void> {
+  const provider = (getSetting("TTS_PROVIDER") || "ai33pro").toLowerCase();
+  if (provider === "ai33pro") {
+    await ai33proTts(runId, text, outPath);
+  } else if (provider === "69labs") {
+    await labs69Tts(runId, text, outPath);
+  } else {
+    throw new Error(`Unknown TTS provider: ${provider} (expected "ai33pro" or "69labs")`);
+  }
+}
+
+/**
+ * ai33.pro TTS for one piece of text → outPath, then apply the voice-speed
+ * setting via ffmpeg atempo (pitch-preserving). ai33pro/ElevenLabs-direct has
+ * no native speed parameter on this proxy, so tempo is a post-process — exactly
+ * as Conveyer Guilherme has always done it.
+ */
+async function ai33proTts(runId: string, text: string, outPath: string): Promise<void> {
   const voiceId = (getSetting("TTS_VOICE_ID") || "").trim();
   if (!voiceId) {
     throw new Error(
@@ -34,18 +64,10 @@ export async function synthesizeScene(
   }
   const modelId = getSetting("TTS_MODEL") || "eleven_multilingual_v2";
 
-  log(runId, "info", `TTS scene #${scene.index} (ai33pro / ${voiceId})`, {
+  const taskId = await createTtsTask(text, { voiceId, modelId });
+  log(runId, "debug", `ai33pro TTS task ${taskId.slice(0, 8)}… (${modelId} / ${voiceId})`, {
     stage: "tts",
-    data: { text: scene.text.slice(0, 80) },
   });
-
-  const taskId = await createTtsTask(scene.text, { voiceId, modelId });
-  log(
-    runId,
-    "debug",
-    `ai33pro TTS task ${taskId.slice(0, 8)}… (${modelId} / ${voiceId})`,
-    { stage: "tts" }
-  );
 
   let task;
   try {
@@ -56,21 +78,105 @@ export async function synthesizeScene(
       `${msg} — check the voice id "${voiceId}" and model "${modelId}" are valid for this ai33pro account.`
     );
   }
-  await downloadTask(task, filePath);
+  await downloadTask(task, outPath);
 
   // Apply the voice-speed setting (pitch-preserving). <1 = slower/calmer.
-  // Done here so the slowed file's length flows naturally into scene duration:
-  // a slower voice also makes that scene linger longer on screen.
   const speed = parseFloat(getSetting("TTS_SPEED") || "1");
   if (Number.isFinite(speed) && Math.abs(speed - 1) > 0.01) {
     try {
-      await applyAudioTempo(filePath, speed);
-      log(runId, "debug", `Voice speed ${speed}× applied to scene #${scene.index}`, { stage: "tts" });
+      await applyAudioTempo(outPath, speed);
+      log(runId, "debug", `Voice speed ${speed}× applied (ai33pro / atempo)`, { stage: "tts" });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      log(runId, "warn", `Voice-speed adjust failed (using original): ${msg.slice(0, 150)}`, { stage: "tts" });
+      log(runId, "warn", `Voice-speed adjust failed (using original): ${msg.slice(0, 150)}`, {
+        stage: "tts",
+      });
     }
   }
+}
+
+/**
+ * 69labs TTS for one piece of text → outPath. Uses the SAME ElevenLabs voice id
+ * as ai33pro, just through the 69labs gateway. ElevenLabs has a NATIVE speed
+ * control here, so TTS_SPEED is passed as voiceSettings.speed (clamped to the
+ * ElevenLabs-supported 0.7–1.2 range) — we do NOT run atempo afterwards.
+ */
+async function labs69Tts(runId: string, text: string, outPath: string): Promise<void> {
+  const voiceId = (getSetting("TTS_VOICE_ID") || "").trim();
+  if (!voiceId) {
+    throw new Error(
+      "No voice set — paste an ElevenLabs voice id into /settings → TTS_VOICE_ID"
+    );
+  }
+  const voiceProviderRaw = (getSetting("TTS_VOICE_PROVIDER") || "elevenlabs").toLowerCase();
+  const voiceProvider =
+    voiceProviderRaw === "elevenlabs" ||
+    voiceProviderRaw === "edgetts" ||
+    voiceProviderRaw === "voice-clone"
+      ? (voiceProviderRaw as "elevenlabs" | "edgetts" | "voice-clone")
+      : "elevenlabs";
+  const modelId = getSetting("TTS_MODEL") || undefined;
+
+  // ElevenLabs-specific fine-tuning. We only wire SPEED here (reusing the global
+  // TTS_SPEED). speed is the NATIVE ElevenLabs knob — clamp to its 0.7–1.2 range.
+  const voiceSettings: {
+    stability?: number;
+    similarityBoost?: number;
+    speed?: number;
+    style?: number;
+    useSpeakerBoost?: boolean;
+  } = {};
+  if (voiceProvider === "elevenlabs") {
+    const speed = parseFloat(getSetting("TTS_SPEED") || "");
+    if (Number.isFinite(speed)) voiceSettings.speed = clamp(speed, 0.7, 1.2);
+  }
+
+  const jobId = await createTtsJob({
+    text,
+    voiceId,
+    voiceProvider,
+    modelId,
+    splitType: "smart",
+    voiceSettings,
+    runId,
+  });
+  log(
+    runId,
+    "debug",
+    `69labs TTS job ${jobId.slice(0, 8)}… (${voiceProvider}/${voiceId}, speed=${voiceSettings.speed ?? "default"})`,
+    { stage: "tts" }
+  );
+  await pollJob("tts", jobId, runId, "tts");
+  await downloadJob("tts", jobId, outPath);
+  // NOTE: no applyAudioTempo here — speed is native (voiceSettings.speed above).
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * Synthesizes one scene's narration to sceneN.mp3 in `outDir`, via whichever
+ * provider TTS_PROVIDER selects (ai33pro default, or 69labs). Speed is handled
+ * inside dispatchTts, so this function just dispatches then probes duration.
+ */
+export async function synthesizeScene(
+  runId: string,
+  scene: Scene,
+  outDir: string,
+  options: TtsOptions = {}
+): Promise<TtsResult> {
+  const provider = (getSetting("TTS_PROVIDER") || "ai33pro").toLowerCase();
+  const fileName = `scene_${String(scene.index).padStart(3, "0")}.mp3`;
+  const filePath = path.join(outDir, fileName);
+
+  log(runId, "info", `TTS scene #${scene.index} (${provider})`, {
+    stage: "tts",
+    data: { text: scene.text.slice(0, 80) },
+  });
+
+  // dispatchTts applies TTS_SPEED itself (atempo for ai33pro, native for 69labs).
+  await dispatchTts(runId, scene.text, filePath, options);
 
   const durationSec = await probeDurationSafe(filePath);
 
@@ -90,38 +196,31 @@ export async function synthesizeScene(
  *
  * ai33pro / ElevenLabs has a per-request character limit, so a long script is
  * chunked at SENTENCE boundaries (never mid-sentence) with each chunk capped at
- * ~2500 chars, synthesised separately (same voice id → same timbre), then the
- * chunk mp3s are concatenated with ffmpeg's concat demuxer. Finally the global
- * TTS_SPEED is applied to the whole file BEFORE transcription, so the Whisper
- * word-timestamps match the audio that actually plays.
+ * ~2500 chars. Each chunk is dispatched via dispatchTts — which means each chunk
+ * is ALREADY speed-correct + provider-correct — then the chunk mp3s are
+ * concatenated with ffmpeg's concat demuxer. Speed is applied PER-CHUNK inside
+ * dispatchTts, so we MUST NOT apply it again on the concatenated file.
  */
 export async function synthesizeFullScript(
   runId: string,
   text: string,
   outPath: string,
-  _options: Record<string, never> = {}
+  options: TtsOptions = {}
 ): Promise<TtsResult> {
-  const voiceId = (getSetting("TTS_VOICE_ID") || "").trim();
-  if (!voiceId) {
-    throw new Error(
-      "No ai33pro voice set — paste an ElevenLabs voice id into /settings → TTS_VOICE_ID"
-    );
-  }
-  const modelId = getSetting("TTS_MODEL") || "eleven_multilingual_v2";
-
-  log(runId, "info", `TTS full script (ai33pro / ${voiceId}, ${text.length} chars)`, {
+  const provider = (getSetting("TTS_PROVIDER") || "ai33pro").toLowerCase();
+  log(runId, "info", `TTS full script (${provider}, ${text.length} chars)`, {
     stage: "tts",
   });
 
-  // ai33pro/ElevenLabs reject very long requests. Chunk at sentence boundaries
-  // (. ! ? … and their unicode variants), each chunk ≤ MAX_CHARS. A single
-  // sentence longer than the cap is sent whole rather than split mid-sentence.
+  // Chunk at sentence boundaries (. ! ? … and unicode variants), each chunk
+  // ≤ MAX_CHARS. A single sentence longer than the cap is sent whole rather
+  // than split mid-sentence.
   const MAX_CHARS = 2500;
   const chunks = chunkAtSentences(text, MAX_CHARS);
 
   if (chunks.length === 1) {
-    // One call — synthesise straight to outPath.
-    await ttsChunkToFile(runId, chunks[0], outPath, voiceId, modelId, 1, 1);
+    // One call — dispatch straight to outPath (already speed/provider-correct).
+    await dispatchTts(runId, chunks[0], outPath, options);
   } else {
     log(runId, "info", `Long script — chunking into ${chunks.length} TTS calls (sentence-aligned)`, {
       stage: "tts",
@@ -130,7 +229,11 @@ export async function synthesizeFullScript(
     const chunkPaths: string[] = [];
     for (let i = 0; i < chunks.length; i++) {
       const chunkPath = outPath.replace(/\.mp3$/i, `__chunk${String(i).padStart(2, "0")}.mp3`);
-      await ttsChunkToFile(runId, chunks[i], chunkPath, voiceId, modelId, i + 1, chunks.length);
+      log(runId, "info", `TTS chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`, {
+        stage: "tts",
+      });
+      // Each chunk is dispatched → speed (TTS_SPEED) is applied here, per chunk.
+      await dispatchTts(runId, chunks[i], chunkPath, options);
       chunkPaths.push(chunkPath);
     }
 
@@ -138,25 +241,15 @@ export async function synthesizeFullScript(
     // copy — no re-encode, so it's instant and lossless).
     concatMp3s(chunkPaths, outPath);
 
-    // Clean up chunk + list files.
+    // Clean up chunk files.
     for (const p of chunkPaths) {
       try { fs.unlinkSync(p); } catch {}
     }
   }
 
-  // Apply the voice-speed setting to the WHOLE continuous file BEFORE it gets
-  // transcribed. atempo is pitch-preserving. Done here (not per chunk) so the
-  // final timeline the Whisper timestamps describe is exactly what plays.
-  const speed = parseFloat(getSetting("TTS_SPEED") || "1");
-  if (Number.isFinite(speed) && Math.abs(speed - 1) > 0.01) {
-    try {
-      await applyAudioTempo(outPath, speed);
-      log(runId, "debug", `Voice speed ${speed}× applied to full script`, { stage: "tts" });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      log(runId, "warn", `Voice-speed adjust failed (using original): ${msg.slice(0, 150)}`, { stage: "tts" });
-    }
-  }
+  // NOTE: speed (TTS_SPEED) was ALREADY applied per-chunk inside dispatchTts.
+  // We deliberately do NOT call applyAudioTempo on the concatenated file —
+  // doing so would slow the voice a second time (double-slow).
 
   const durationSec = await probeDurationSafe(outPath);
   log(
@@ -192,30 +285,6 @@ function chunkAtSentences(text: string, maxChars: number): string[] {
   }
   if (cur.trim()) chunks.push(cur.trim());
   return chunks.length > 0 ? chunks : [trimmed];
-}
-
-/** Synthesise one chunk of the full script to `outPath` via ai33pro. */
-async function ttsChunkToFile(
-  runId: string,
-  chunkText: string,
-  outPath: string,
-  voiceId: string,
-  modelId: string,
-  idx: number,
-  total: number
-): Promise<void> {
-  log(runId, "info", `TTS chunk ${idx}/${total} (${chunkText.length} chars)`, { stage: "tts" });
-  const taskId = await createTtsTask(chunkText, { voiceId, modelId });
-  let task;
-  try {
-    task = await pollTask(taskId, runId, "tts");
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(
-      `${msg} — check the voice id "${voiceId}" and model "${modelId}" are valid for this ai33pro account.`
-    );
-  }
-  await downloadTask(task, outPath);
 }
 
 /**
