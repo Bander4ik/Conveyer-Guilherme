@@ -1,0 +1,32 @@
+{
+  "name": "conveyer-guilherme",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Faceless YouTube pipeline with real stock b-roll (instead of AI video). Forked from Conveyer Hum.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "googleapis": "^171.4.0",
+    "next": "16.2.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/fluent-ffmpeg": "^2.1.27",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
