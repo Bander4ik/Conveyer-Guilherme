@@ -243,6 +243,8 @@ Always set both to match. For normal videos, the defaults (`1920x1080` + `landsc
 | `MAX_CLIP_SECONDS` | Max length of one b-roll clip in smooth mode; longer scenes get several clips. `0` = one clip per scene. | 7 |
 
 > **Switching the voice engine:** the same `TTS_VOICE_ID` (an ElevenLabs voice) works on both `ai33pro` and `69labs`, so you can flip `TTS_PROVIDER` without changing your voice. Speed is handled correctly either way.
+>
+> **Auto-fallback:** you don't strictly have to set both. If the selected engine has no key but the other one does, Conveyer automatically uses the one that's configured — so whichever key you paste (ai33pro **or** 69labs), the voiceover just works. If you set both keys, `TTS_PROVIDER` decides.
 
 ### Stock footage (Pexels)
 | Setting | What it does | Default |

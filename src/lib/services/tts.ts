@@ -39,7 +39,22 @@ async function dispatchTts(
   outPath: string,
   _options: TtsOptions = {}
 ): Promise<void> {
-  const provider = (getSetting("TTS_PROVIDER") || "ai33pro").toLowerCase();
+  let provider = (getSetting("TTS_PROVIDER") || "ai33pro").toLowerCase();
+
+  // Auto-fallback: if the selected engine has NO key configured but the OTHER
+  // engine does, use the one that's actually set up. So whichever key you paste
+  // (ai33pro OR 69labs) the voiceover just works, without also having to flip
+  // TTS_PROVIDER. (If both keys are set, TTS_PROVIDER is respected as-is.)
+  const hasAi33 = getSetting("AI33PRO_API_KEY").trim().length > 0;
+  const has69 = getSetting("LABS69_API_KEY").trim().length > 0;
+  if (provider === "ai33pro" && !hasAi33 && has69) {
+    log(runId, "warn", "AI33PRO_API_KEY not set — using 69labs instead (its key is present)", { stage: "tts" });
+    provider = "69labs";
+  } else if (provider === "69labs" && !has69 && hasAi33) {
+    log(runId, "warn", "LABS69_API_KEY not set — using ai33pro instead (its key is present)", { stage: "tts" });
+    provider = "ai33pro";
+  }
+
   if (provider === "ai33pro") {
     await ai33proTts(runId, text, outPath);
   } else if (provider === "69labs") {
