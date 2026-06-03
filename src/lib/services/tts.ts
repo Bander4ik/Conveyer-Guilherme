@@ -72,7 +72,7 @@ async function dispatchTts(
  * as Conveyer Guilherme has always done it.
  */
 async function ai33proTts(runId: string, text: string, outPath: string): Promise<void> {
-  const voiceId = (getSetting("TTS_VOICE_ID") || "").trim();
+  const voiceId = normalizeVoiceId(getSetting("TTS_VOICE_ID") || "");
   if (!voiceId) {
     throw new Error(
       "No ai33pro voice set — paste an ElevenLabs voice id into /settings → TTS_VOICE_ID"
@@ -118,7 +118,7 @@ async function ai33proTts(runId: string, text: string, outPath: string): Promise
  * ElevenLabs-supported 0.7–1.2 range) — we do NOT run atempo afterwards.
  */
 async function labs69Tts(runId: string, text: string, outPath: string): Promise<void> {
-  const voiceId = (getSetting("TTS_VOICE_ID") || "").trim();
+  const voiceId = normalizeVoiceId(getSetting("TTS_VOICE_ID") || "");
   if (!voiceId) {
     throw new Error(
       "No voice set — paste an ElevenLabs voice id into /settings → TTS_VOICE_ID"
@@ -169,6 +169,18 @@ async function labs69Tts(runId: string, text: string, outPath: string): Promise<
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * Normalizes a pasted voice id. ai33.pro's dashboard lists ElevenLabs voices as
+ * "elevenlabs_<id>", but the TTS API (and 69labs) want the BARE ElevenLabs id
+ * (e.g. "KeU8nqWFDbaoi0QVUjD3"). If the user pastes the prefixed form, strip the
+ * leading "elevenlabs_" — otherwise the service doesn't recognise the voice and
+ * silently falls back to a default, so the output voice doesn't match the id.
+ * Only the known display prefix is stripped; a correct bare id is untouched.
+ */
+function normalizeVoiceId(raw: string): string {
+  return raw.trim().replace(/^elevenlabs_/i, "");
 }
 
 /**

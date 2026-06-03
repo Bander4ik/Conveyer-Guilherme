@@ -107,8 +107,8 @@ export const ALL_GROUPS: Group[] = [
       {
         key: "TTS_VOICE_ID",
         label: "ElevenLabs voice id",
-        desc: "The ElevenLabs voice id used for narration. Find voice ids in your ai33pro dashboard or the ElevenLabs voice library. The id goes into the request URL — most are short alphanumeric strings.",
-        examples: "JBFqnCBsd6RMkjVDRZzb (George — documentary male)  ·  21m00Tcm4TlvDq8ikWAM (Rachel — calm female)",
+        desc: "The ElevenLabs voice id for narration — a short alphanumeric string like KeU8nqWFDbaoi0QVUjD3. IMPORTANT: paste just the ID. The ai33.pro dashboard shows voices as 'elevenlabs_<id>' — if you copy that whole thing the app strips the 'elevenlabs_' prefix for you, but the real id is only the part after it. A wrong/prefixed id makes the service fall back to a DEFAULT voice (output won't match what you picked).",
+        examples: "KeU8nqWFDbaoi0QVUjD3  ·  JBFqnCBsd6RMkjVDRZzb (George)  ·  NOT elevenlabs_KeU8... (prefix is auto-removed)",
       },
       {
         key: "TTS_MODEL",
