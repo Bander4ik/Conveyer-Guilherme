@@ -221,43 +221,60 @@ async function runSingleShot(
   const mixMode = (getSetting("SCENE_MIX_MODE") || "random") as "random" | "alternating";
   const photoScenes = pickPhotoScenes(scenes, photoRatio, mixMode);
 
-  // 3. Build the sub-clip plan. A scene whose aligned range is longer than
-  //    MAX_CLIP_SECONDS is split into ceil(sliceSec/MAX) EQUAL sub-segments,
-  //    each getting its OWN Pexels asset, so the picture keeps changing instead
-  //    of one clip stretching/freezing for many seconds. 0 disables the split.
   const maxClipSec = Math.max(0, Number(getSetting("MAX_CLIP_SECONDS") || "7"));
+  const minSceneMs = Math.max(0, Number(getSetting("MIN_SCENE_SECONDS") || "3")) * 1000;
   const rangeByScene = new Map<number, SceneAudioRange>();
   for (const r of globalAudio.ranges) rangeByScene.set(r.sceneIdx, r);
 
-  const plans: SubClipPlan[] = [];
+  // 3. MERGE adjacent scenes into "segments" so each visual stays on screen at
+  //    least MIN_SCENE_SECONDS. This stops the picture flipping every 1-2s AND
+  //    absorbs stray micro-scenes (e.g. a lone "candy.") into a neighbour — the
+  //    segment keeps the FIRST scene's footage for the whole merged span, so a
+  //    one-word off-topic scene never gets its own literal clip.
+  type Segment = { scene: Scene; startMs: number; endMs: number };
+  const segments: Segment[] = [];
   for (const scene of scenes) {
     const range = rangeByScene.get(scene.index) ?? { sceneIdx: scene.index, startMs: 0, endMs: 0 };
-    const mode: AssetMode = photoScenes.has(scene.index) ? "photo" : "video";
-    const sliceMs = Math.max(0, range.endMs - range.startMs);
-    const sliceSec = sliceMs / 1000;
+    const prev = segments[segments.length - 1];
+    if (prev && prev.endMs - prev.startMs < minSceneMs) {
+      prev.endMs = range.endMs; // previous segment still too short → extend it, keep its visual
+    } else {
+      segments.push({ scene, startMs: range.startMs, endMs: range.endMs });
+    }
+  }
+  // Fold a too-short FINAL segment back into the previous one.
+  if (segments.length >= 2) {
+    const lastSeg = segments[segments.length - 1];
+    if (lastSeg.endMs - lastSeg.startMs < minSceneMs) {
+      segments[segments.length - 2].endMs = lastSeg.endMs;
+      segments.pop();
+    }
+  }
+  const mergedAway = scenes.length - segments.length;
 
-    const segCount =
-      maxClipSec > 0 && sliceSec > maxClipSec ? Math.ceil(sliceSec / maxClipSec) : 1;
+  // 4. Build the sub-clip plan from segments. A segment longer than
+  //    MAX_CLIP_SECONDS is split into equal sub-clips, each getting its OWN
+  //    Pexels asset, so a long segment still keeps the picture moving.
+  const plans: SubClipPlan[] = [];
+  for (const seg of segments) {
+    const scene = seg.scene;
+    const mode: AssetMode = photoScenes.has(scene.index) ? "photo" : "video";
+    const sliceMs = Math.max(0, seg.endMs - seg.startMs);
+    const sliceSec = sliceMs / 1000;
+    const segCount = maxClipSec > 0 && sliceSec > maxClipSec ? Math.ceil(sliceSec / maxClipSec) : 1;
+    const padded = String(scene.index).padStart(3, "0");
 
     if (segCount <= 1) {
-      plans.push({
-        scene,
-        mode,
-        fileStem: `scene_${String(scene.index).padStart(3, "0")}`,
-        startMs: range.startMs,
-        endMs: range.endMs,
-      });
+      plans.push({ scene, mode, fileStem: `scene_${padded}`, startMs: seg.startMs, endMs: seg.endMs });
     } else {
-      const padded = String(scene.index).padStart(3, "0");
       const segLen = sliceMs / segCount;
       for (let k = 0; k < segCount; k++) {
-        const segStart = Math.round(range.startMs + k * segLen);
-        const segEnd = k === segCount - 1 ? range.endMs : Math.round(range.startMs + (k + 1) * segLen);
-        // First sub-clip keeps the canonical `scene_NNN` stem so the Drive
-        // backup's scene-asset scan (which looks for scene_NNN.*) still finds a
-        // representative asset for the scene. Later sub-clips get a _sub_NN suffix.
+        const subStart = Math.round(seg.startMs + k * segLen);
+        const subEnd = k === segCount - 1 ? seg.endMs : Math.round(seg.startMs + (k + 1) * segLen);
+        // First sub-clip keeps the canonical `scene_NNN` stem so the Drive backup
+        // still finds a representative asset. Later sub-clips get a _sub_NN suffix.
         const fileStem = k === 0 ? `scene_${padded}` : `scene_${padded}_sub_${String(k + 1).padStart(2, "0")}`;
-        plans.push({ scene, mode, fileStem, startMs: segStart, endMs: segEnd });
+        plans.push({ scene, mode, fileStem, startMs: subStart, endMs: subEnd });
       }
     }
   }
@@ -266,13 +283,15 @@ async function runSingleShot(
   log(
     runId,
     "info",
-    `Fetching ${plans.length} Pexels asset(s) for ${scenes.length} scenes` +
-      (splitScenes > 0 ? ` (${splitScenes} long scene(s) split into multiple clips, ${maxClipSec}s max each)` : "") +
-      ` · ${photoScenes.size} photo / ${scenes.length - photoScenes.size} video scenes`,
+    `${scenes.length} scenes → ${segments.length} visual segments (≥${minSceneMs / 1000}s each` +
+      (mergedAway > 0 ? `, ${mergedAway} short scene(s) merged` : "") +
+      `) → ${plans.length} Pexels clip(s)` +
+      (splitScenes > 0 ? ` (${splitScenes} long segment(s) split, ${maxClipSec}s max each)` : "") +
+      ` · ${photoScenes.size} photo / ${scenes.length - photoScenes.size} video`,
     { stage: "pipeline" }
   );
 
-  // 4. Fetch every sub-clip's Pexels asset, concurrency-limited, sharing the
+  // 5. Fetch every sub-clip's Pexels asset, concurrency-limited, sharing the
   //    dedup id sets so adjacent sub-clips don't all grab the same footage.
   const animConc = Math.max(1, Number(getSetting("ANIMATION_CONCURRENCY") || "5"));
   const limitAnim = pLimit(animConc);

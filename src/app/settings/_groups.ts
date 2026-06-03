@@ -123,10 +123,16 @@ export const ALL_GROUPS: Group[] = [
         examples: "1.0 = normal  ·  0.9 = noticeably calmer (recommended if too fast)  ·  0.85 = slow/documentary",
       },
       {
+        key: "MIN_SCENE_SECONDS",
+        label: "Min seconds per shot",
+        desc: "Smooth-voice mode only. The shortest time a single piece of footage stays on screen. Scenes whose narration is shorter than this are merged with the next one (keeping the first scene's footage), so the video doesn't 'jump' on every word — and a stray one-word line never gets its own off-topic clip. Together with 'Max seconds per b-roll clip' this keeps every shot in a calm 3–7s range.",
+        examples: "3 = default (recommended)  ·  4 = calmer  ·  2 = snappier",
+      },
+      {
         key: "MAX_CLIP_SECONDS",
         label: "Max seconds per b-roll clip",
-        desc: "Smooth-voice mode only. Keeps the picture moving: if one scene's narration runs longer than this, the app fetches SEVERAL different Pexels clips for that scene (each this many seconds) instead of stretching or freezing one clip. Lower = more visual variety, more Pexels usage. Set to 0 to use just one clip per scene no matter how long it is.",
-        examples: "7 = default  ·  5 = livelier / more cuts  ·  0 = one clip per scene",
+        desc: "Smooth-voice mode only. Keeps the picture moving: if a segment's narration runs longer than this, the app fetches SEVERAL different Pexels clips for it (each this many seconds) instead of stretching or freezing one clip. Lower = more visual variety, more Pexels usage. Set to 0 to use just one clip per segment no matter how long.",
+        examples: "7 = default  ·  5 = livelier / more cuts  ·  0 = one clip per segment",
       },
     ],
   },
