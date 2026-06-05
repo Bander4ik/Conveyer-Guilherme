@@ -12,6 +12,8 @@ export interface Field {
   examples?: string;
   required?: boolean;
   multiline?: boolean;
+  /** Hard character cap enforced by the input/textarea (e.g. short hint fields). */
+  maxLength?: number;
 }
 
 export interface Group {
@@ -140,6 +142,14 @@ export const ALL_GROUPS: Group[] = [
     title: "Stock Footage (Pexels)",
     subtitle: "Each scene gets one stock clip from Pexels matched against its visual prompt.",
     fields: [
+      {
+        key: "VIDEO_CONTEXT",
+        label: "Video context (optional)",
+        desc: "A short hint about WHERE the video takes place and its style — used to keep the footage on-theme. The app already reads your whole script and carries the setting forward on its own, so you can usually LEAVE THIS EMPTY. Fill it only when a video keeps pulling slightly off-topic clips, and keep it to ONE short sentence. Describe the place/world, not commands — e.g. a setting, not 'always show X'. (A long paste or a full prompt here will confuse the search, so it's length-capped on purpose.)",
+        examples: "A frugal shopper inside a pharmacy and grocery store; realistic, everyday  ·  Appalachian homestead garden, weathered hands, natural light",
+        multiline: true,
+        maxLength: 300,
+      },
       {
         key: "STOCK_FOOTAGE_ORIENTATION",
         label: "Orientation",

@@ -18,6 +18,7 @@ export const SETTING_KEYS = [
 
   // ── Scene splitting (Gemini only) ─────────────────────────────────
   "SCENE_SPLIT_MODEL",       // e.g. gemini-flash-latest
+  "VIDEO_CONTEXT",           // optional 1–2 sentence channel/setting hint, injected into scene-split as background DATA (never as commands). Capped ~300 chars. Empty = setting inferred automatically from the script.
 
   // ── Text-to-Speech (ai33.pro / ElevenLabs voices) ─────────────────
   "TTS_PROVIDER",            // voiceover engine: ai33pro (default) | 69labs. Both serve the SAME ElevenLabs voices; 69labs is just an alternate gateway.
@@ -121,6 +122,10 @@ export const DEFAULTS: Record<SettingKey, string> = {
 
   // Scene split — Gemini only
   SCENE_SPLIT_MODEL: "gemini-flash-latest",
+  // Optional channel/setting hint. Empty = the model infers the setting from
+  // the script itself (recommended). When set, it's passed as background DATA
+  // so footage stays on-theme — but never executed as instructions.
+  VIDEO_CONTEXT: "",
 
   // TTS — ai33.pro with ElevenLabs voices. Default voice left empty so the
   // user picks one in /settings (any ElevenLabs voice id works).

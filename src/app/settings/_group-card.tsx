@@ -60,6 +60,7 @@ export function GroupCard({ group, values, setValues }: GroupCardProps) {
                   placeholder={f.examples ? `e.g. ${f.examples}` : ""}
                   onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
                   rows={Math.max(2, Math.min(6, (values[f.key] ?? "").split(/\n/).length + 1))}
+                  maxLength={f.maxLength}
                   style={{ borderColor: missing ? "var(--danger)" : undefined }}
                 />
               ) : (
@@ -68,6 +69,7 @@ export function GroupCard({ group, values, setValues }: GroupCardProps) {
                   value={values[f.key] ?? ""}
                   placeholder={f.examples ? `e.g. ${f.examples}` : ""}
                   onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
+                  maxLength={f.maxLength}
                   style={{ borderColor: missing ? "var(--danger)" : undefined }}
                 />
               )}

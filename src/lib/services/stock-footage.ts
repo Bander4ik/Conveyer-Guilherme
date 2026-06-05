@@ -440,6 +440,24 @@ export function visualPromptToQuery(visualPrompt: string, maxWords = 18): string
     .trim();
 }
 
+/**
+ * Ordered, cleaned Pexels query candidates for a scene (best first).
+ *
+ * Uses `scene.visual_queries` when present (the 2–3 alternates Gemini produces),
+ * otherwise falls back to the single `visual_prompt`. Each is normalized for
+ * Pexels and de-duplicated. The acquire helpers try them in order and use the
+ * first that returns a usable asset — so a junk/empty first result no longer
+ * fails the whole scene.
+ */
+function sceneQueryCandidates(scene: Scene): string[] {
+  const raw =
+    scene.visual_queries && scene.visual_queries.length > 0
+      ? scene.visual_queries
+      : [scene.visual_prompt];
+  const cleaned = raw.map((q) => visualPromptToQuery(q)).filter(Boolean);
+  return [...new Set(cleaned)];
+}
+
 export interface AcquireOptions {
   runId: string;
   orientation?: Orientation;
@@ -476,58 +494,85 @@ export async function acquireStockClipForScene(
 ): Promise<{ pexelsId: number; author: string | null; sourceUrl: string }> {
   const { runId, orientation = "landscape", maxHeight = 1080, minDuration = 4, usedIds } = options;
 
-  const query = visualPromptToQuery(scene.visual_prompt);
-  if (!query) {
-    throw new Error(`Scene #${scene.index}: visual_prompt produced an empty Pexels query`);
+  const candidates = sceneQueryCandidates(scene);
+  if (candidates.length === 0) {
+    throw new Error(`Scene #${scene.index}: empty Pexels query (no visual_queries)`);
   }
 
-  log(runId, "debug", `Pexels search: "${query}"`, { stage: "animate" });
+  let lastErr: unknown;
+  // Try each query candidate in order. The first that returns a downloadable,
+  // non-duplicate clip wins — so a weak/empty first query falls back instead of
+  // failing the scene.
+  for (let qi = 0; qi < candidates.length; qi++) {
+    const query = candidates[qi];
+    const tag = candidates.length > 1 ? ` (query ${qi + 1}/${candidates.length})` : "";
+    log(runId, "debug", `Pexels search${tag}: "${query}"`, { stage: "animate" });
 
-  const videos = await searchPexelsVideos(query, {
-    orientation,
-    minDuration,
-    perPage: 15,
-    runId,
-  });
-
-  if (videos.length === 0) {
-    throw new Error(`Pexels returned 0 videos for: "${query}"`);
-  }
-
-  // First pass: only un-claimed videos. If all candidates are already used,
-  // fall back to the full list (a reused clip is better than a failed scene).
-  const fresh = usedIds && usedIds.size > 0 ? videos.filter((v) => !usedIds.has(v.id)) : videos;
-  const ordered = fresh.length > 0 ? fresh : videos;
-  const reusing = fresh.length === 0 && usedIds && usedIds.size > 0;
-
-  for (const video of ordered) {
-    // Atomic claim — between has() and add() no other Promise can run.
-    if (usedIds && usedIds.has(video.id) && !reusing) continue;
-    const file = pickBestVideoFile(video, { maxHeight });
-    if (!file) continue;
-    if (usedIds && !usedIds.has(video.id)) usedIds.add(video.id);
-
+    let videos: PexelsVideo[];
     try {
-      await downloadPexelsVideo(file, outPath);
-      const author = video.user?.name ?? null;
-      const reusedTag = reusing ? " (reused — no fresh matches)" : "";
-      log(
-        runId,
-        "info",
-        `Pexels clip: id=${video.id} ${file.width}x${file.height} ${video.duration}s by ${author ?? "?"}${reusedTag}`,
-        { stage: "animate", data: { pexelsId: video.id, author, sourceUrl: video.url } }
-      );
-      return { pexelsId: video.id, author, sourceUrl: video.url };
+      videos = await searchPexelsVideos(query, { orientation, minDuration, perPage: 15, runId });
     } catch (e) {
-      // Release the claim — this id failed, let another scene try it.
-      if (usedIds && !reusing) usedIds.delete(video.id);
+      lastErr = e;
       const msg = e instanceof Error ? e.message : String(e);
-      log(runId, "warn", `Pexels download failed (${video.id}), trying next: ${msg.slice(0, 150)}`, {
+      log(runId, "warn", `Pexels search failed for "${query}", trying next: ${msg.slice(0, 150)}`, {
         stage: "animate",
       });
+      continue;
     }
+
+    if (videos.length === 0) {
+      lastErr = new Error(`Pexels returned 0 videos for: "${query}"`);
+      if (qi < candidates.length - 1) {
+        log(runId, "debug", `No videos for "${query}" — trying next query`, { stage: "animate" });
+      }
+      continue;
+    }
+
+    // First pass: only un-claimed videos. If all candidates are already used,
+    // fall back to the full list (a reused clip is better than a failed scene).
+    const fresh = usedIds && usedIds.size > 0 ? videos.filter((v) => !usedIds.has(v.id)) : videos;
+    const ordered = fresh.length > 0 ? fresh : videos;
+    const reusing = fresh.length === 0 && usedIds && usedIds.size > 0;
+
+    for (const video of ordered) {
+      // Atomic claim — between has() and add() no other Promise can run.
+      if (usedIds && usedIds.has(video.id) && !reusing) continue;
+      const file = pickBestVideoFile(video, { maxHeight });
+      if (!file) continue;
+      if (usedIds && !usedIds.has(video.id)) usedIds.add(video.id);
+
+      try {
+        await downloadPexelsVideo(file, outPath);
+        const author = video.user?.name ?? null;
+        const reusedTag = reusing ? " (reused — no fresh matches)" : "";
+        log(
+          runId,
+          "info",
+          `Pexels clip: id=${video.id} ${file.width}x${file.height} ${video.duration}s by ${author ?? "?"}${reusedTag} [${query}]`,
+          { stage: "animate", data: { pexelsId: video.id, author, sourceUrl: video.url } }
+        );
+        return { pexelsId: video.id, author, sourceUrl: video.url };
+      } catch (e) {
+        // Release the claim — this id failed, let another scene try it.
+        if (usedIds && !reusing) usedIds.delete(video.id);
+        lastErr = e;
+        const msg = e instanceof Error ? e.message : String(e);
+        log(runId, "warn", `Pexels download failed (${video.id}), trying next: ${msg.slice(0, 150)}`, {
+          stage: "animate",
+        });
+      }
+    }
+    // Nothing in this query's results downloaded — fall through to next candidate.
   }
-  throw new Error(`All ${videos.length} Pexels candidates failed to download for: "${query}"`);
+
+  const tried = candidates.map((q) => `"${q}"`).join(", ");
+  if (lastErr instanceof Error && /returned 0 videos/.test(lastErr.message)) {
+    throw new Error(`Pexels returned 0 videos for scene #${scene.index} (tried ${tried})`);
+  }
+  throw new Error(
+    `All Pexels candidates failed for scene #${scene.index} (tried ${tried})` +
+      (lastErr instanceof Error ? `: ${lastErr.message.slice(0, 150)}` : "")
+  );
 }
 
 // ── Photo acquisition (mirror of acquireStockClipForScene) ───────────────────
@@ -555,49 +600,73 @@ export async function acquireStockPhotoForScene(
 ): Promise<{ pexelsId: number; photographer: string | null; sourceUrl: string }> {
   const { runId, orientation = "landscape", maxHeight = 1080, usedIds } = options;
 
-  const query = visualPromptToQuery(scene.visual_prompt);
-  if (!query) {
-    throw new Error(`Scene #${scene.index}: visual_prompt produced an empty Pexels query`);
+  const candidates = sceneQueryCandidates(scene);
+  if (candidates.length === 0) {
+    throw new Error(`Scene #${scene.index}: empty Pexels query (no visual_queries)`);
   }
 
-  log(runId, "debug", `Pexels photo search: "${query}"`, { stage: "animate" });
+  let lastErr: unknown;
+  for (let qi = 0; qi < candidates.length; qi++) {
+    const query = candidates[qi];
+    const tag = candidates.length > 1 ? ` (query ${qi + 1}/${candidates.length})` : "";
+    log(runId, "debug", `Pexels photo search${tag}: "${query}"`, { stage: "animate" });
 
-  const photos = await searchPexelsPhotos(query, {
-    orientation,
-    perPage: 15,
-    runId,
-  });
-
-  if (photos.length === 0) {
-    throw new Error(`Pexels returned 0 photos for: "${query}"`);
-  }
-
-  const fresh = usedIds && usedIds.size > 0 ? photos.filter((p) => !usedIds.has(p.id)) : photos;
-  const ordered = fresh.length > 0 ? fresh : photos;
-  const reusing = fresh.length === 0 && usedIds && usedIds.size > 0;
-
-  for (const photo of ordered) {
-    if (usedIds && usedIds.has(photo.id) && !reusing) continue;
-    if (usedIds && !usedIds.has(photo.id)) usedIds.add(photo.id);
-
-    const url = pickBestPhotoSrc(photo, maxHeight);
+    let photos: PexelsPhoto[];
     try {
-      await downloadPexelsPhoto(url, outPath);
-      const reusedTag = reusing ? " (reused — no fresh matches)" : "";
-      log(
-        runId,
-        "info",
-        `Pexels photo: id=${photo.id} ${photo.width}x${photo.height} by ${photo.photographer || "?"}${reusedTag}`,
-        { stage: "animate", data: { pexelsId: photo.id, photographer: photo.photographer, sourceUrl: photo.url } }
-      );
-      return { pexelsId: photo.id, photographer: photo.photographer || null, sourceUrl: photo.url };
+      photos = await searchPexelsPhotos(query, { orientation, perPage: 15, runId });
     } catch (e) {
-      if (usedIds && !reusing) usedIds.delete(photo.id);
+      lastErr = e;
       const msg = e instanceof Error ? e.message : String(e);
-      log(runId, "warn", `Pexels photo download failed (${photo.id}), trying next: ${msg.slice(0, 150)}`, {
+      log(runId, "warn", `Pexels photo search failed for "${query}", trying next: ${msg.slice(0, 150)}`, {
         stage: "animate",
       });
+      continue;
+    }
+
+    if (photos.length === 0) {
+      lastErr = new Error(`Pexels returned 0 photos for: "${query}"`);
+      if (qi < candidates.length - 1) {
+        log(runId, "debug", `No photos for "${query}" — trying next query`, { stage: "animate" });
+      }
+      continue;
+    }
+
+    const fresh = usedIds && usedIds.size > 0 ? photos.filter((p) => !usedIds.has(p.id)) : photos;
+    const ordered = fresh.length > 0 ? fresh : photos;
+    const reusing = fresh.length === 0 && usedIds && usedIds.size > 0;
+
+    for (const photo of ordered) {
+      if (usedIds && usedIds.has(photo.id) && !reusing) continue;
+      if (usedIds && !usedIds.has(photo.id)) usedIds.add(photo.id);
+
+      const url = pickBestPhotoSrc(photo, maxHeight);
+      try {
+        await downloadPexelsPhoto(url, outPath);
+        const reusedTag = reusing ? " (reused — no fresh matches)" : "";
+        log(
+          runId,
+          "info",
+          `Pexels photo: id=${photo.id} ${photo.width}x${photo.height} by ${photo.photographer || "?"}${reusedTag} [${query}]`,
+          { stage: "animate", data: { pexelsId: photo.id, photographer: photo.photographer, sourceUrl: photo.url } }
+        );
+        return { pexelsId: photo.id, photographer: photo.photographer || null, sourceUrl: photo.url };
+      } catch (e) {
+        if (usedIds && !reusing) usedIds.delete(photo.id);
+        lastErr = e;
+        const msg = e instanceof Error ? e.message : String(e);
+        log(runId, "warn", `Pexels photo download failed (${photo.id}), trying next: ${msg.slice(0, 150)}`, {
+          stage: "animate",
+        });
+      }
     }
   }
-  throw new Error(`All ${photos.length} Pexels photo candidates failed to download for: "${query}"`);
+
+  const tried = candidates.map((q) => `"${q}"`).join(", ");
+  if (lastErr instanceof Error && /returned 0 photos/.test(lastErr.message)) {
+    throw new Error(`Pexels returned 0 photos for scene #${scene.index} (tried ${tried})`);
+  }
+  throw new Error(
+    `All Pexels photo candidates failed for scene #${scene.index} (tried ${tried})` +
+      (lastErr instanceof Error ? `: ${lastErr.message.slice(0, 150)}` : "")
+  );
 }
