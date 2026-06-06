@@ -15,6 +15,7 @@ import {
   assembleSingleShot,
   type AssembleInput,
   type SingleShotInput,
+  type OverlaySpec,
 } from "./services/video-assemble";
 import { syncRunToDrive } from "./services/run-upload";
 import { checkCancelled, clearCancelled, CancelledError } from "./cancellation";
@@ -105,6 +106,27 @@ export async function runPipeline(runId: string, script: string) {
     // window — the summary makes the CAUSE visible even in a truncated view.
     const failureReasons: string[] = [];
 
+    // Text overlays for the per-scene (legacy) path. No word timestamps here, so
+    // hook scoping uses the running sum of per-scene duration hints.
+    const overlayMode = (getSetting("TEXT_OVERLAY_MODE") || "hook").toLowerCase();
+    const overlayByScene = new Map<number, OverlaySpec>();
+    if (overlayMode !== "off") {
+      const hookSec = Math.max(0, Number(getSetting("TEXT_OVERLAY_HOOK_SECONDS") || "30"));
+      const MAX_OVERLAYS = 4;
+      let accSec = 0;
+      let count = 0;
+      for (const scene of scenes) {
+        const startSec = accSec;
+        accSec += Math.max(1, scene.duration_hint_sec || 5);
+        const text = (scene.overlay || "").trim();
+        if (!text) continue;
+        if (overlayMode === "hook" && startSec >= hookSec) continue;
+        if (count >= MAX_OVERLAYS) break;
+        overlayByScene.set(scene.index, { text, atSec: 0.3 });
+        count++;
+      }
+    }
+
     const processScene = async (scene: Scene): Promise<SceneResult> => {
       try {
         checkCancelled(runId);
@@ -121,6 +143,7 @@ export async function runPipeline(runId: string, script: string) {
           imagePath: asset.path,
           videoPath: asset.kind === "video" ? asset.path : null,
           audio,
+          overlay: overlayByScene.get(scene.index),
         };
       } catch (e) {
         if (e instanceof CancelledError) throw e;
@@ -184,6 +207,8 @@ interface SubClipPlan {
   fileStem: string;
   startMs: number;
   endMs: number;
+  /** Optional hook-emphasis caption assigned to this sub-clip. */
+  overlay?: OverlaySpec;
 }
 
 /**
@@ -291,6 +316,11 @@ async function runSingleShot(
     { stage: "pipeline" }
   );
 
+  // 4b. Text overlays (hook emphasis). Attach a fading caption to the sub-clip
+  //     whose time range covers each qualifying scene's spoken token. Scoped to
+  //     the first N seconds by default ("hook") — captions everywhere gets noisy.
+  assignTextOverlays(runId, scenes, plans, rangeByScene);
+
   // 5. Fetch every sub-clip's Pexels asset, concurrency-limited, sharing the
   //    dedup id sets so adjacent sub-clips don't all grab the same footage.
   const animConc = Math.max(1, Number(getSetting("ANIMATION_CONCURRENCY") || "5"));
@@ -317,6 +347,7 @@ async function runSingleShot(
             kind: asset.kind,
             startMs: plan.startMs,
             endMs: plan.endMs,
+            overlay: plan.overlay,
           };
         } catch (e) {
           if (e instanceof CancelledError) throw e;
@@ -359,6 +390,58 @@ async function runSingleShot(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     log(runId, "error", `Drive sync failed (run is unaffected): ${msg}`, { stage: "gdrive" });
+  }
+}
+
+/**
+ * Attaches hook-emphasis text overlays to sub-clip plans (single-shot path).
+ *
+ * For each scene carrying an `overlay` token (a striking number / year / place)
+ * that qualifies for the configured scope — whole video, or by default only the
+ * opening TEXT_OVERLAY_HOOK_SECONDS — the caption is bound to the sub-clip whose
+ * [startMs,endMs] range covers the MIDPOINT of that scene's spoken audio. The
+ * total is capped so the hook never gets cluttered.
+ */
+function assignTextOverlays(
+  runId: string,
+  scenes: Scene[],
+  plans: SubClipPlan[],
+  rangeByScene: Map<number, SceneAudioRange>
+): void {
+  const mode = (getSetting("TEXT_OVERLAY_MODE") || "hook").toLowerCase();
+  if (mode === "off") return;
+  const hookMs = Math.max(0, Number(getSetting("TEXT_OVERLAY_HOOK_SECONDS") || "30")) * 1000;
+  const MAX_OVERLAYS = 4;
+
+  const candidates: { text: string; atMs: number }[] = [];
+  for (const scene of scenes) {
+    const text = (scene.overlay || "").trim();
+    if (!text) continue;
+    const range = rangeByScene.get(scene.index);
+    if (!range) continue;
+    if (mode === "hook" && range.startMs >= hookMs) continue;
+    candidates.push({ text, atMs: (range.startMs + range.endMs) / 2 });
+  }
+  candidates.sort((a, b) => a.atMs - b.atMs);
+  const chosen = candidates.slice(0, MAX_OVERLAYS);
+
+  const applied: string[] = [];
+  for (const ov of chosen) {
+    const plan =
+      plans.find((p) => ov.atMs >= p.startMs && ov.atMs < p.endMs) ??
+      plans.find((p) => ov.atMs >= p.startMs && ov.atMs <= p.endMs);
+    if (plan && !plan.overlay) {
+      plan.overlay = { text: ov.text, atSec: Math.max(0, (ov.atMs - plan.startMs) / 1000) };
+      applied.push(ov.text);
+    }
+  }
+  if (applied.length > 0) {
+    log(
+      runId,
+      "info",
+      `Text overlays: ${applied.length} caption(s) in ${mode === "hook" ? "the hook" : "the whole video"} — ${applied.join(", ")}`,
+      { stage: "assemble" }
+    );
   }
 }
 

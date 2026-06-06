@@ -16,11 +16,21 @@ import type { TtsResult } from "./tts";
  */
 const MAX_CLIPS_PER_PASS = 50;
 
+/** A short caption to flash on a clip (hook-emphasis text overlay). */
+export interface OverlaySpec {
+  /** Short text to display, e.g. "$400", "1998", "73%", "Texas". */
+  text: string;
+  /** Start time LOCAL to this clip, in seconds (clamped during render). */
+  atSec: number;
+}
+
 export interface AssembleInput {
   scene: Scene;
   imagePath: string;
   videoPath?: string | null;
   audio: TtsResult;
+  /** Optional big fading caption burned into this clip. */
+  overlay?: OverlaySpec;
 }
 
 /**
@@ -65,10 +75,10 @@ export async function assembleVideo(
         const audioDuration = await probeDuration(item.audio.filePath);
         const clipDuration = audioDuration + tailSilence;
         if (item.videoPath) {
-          await renderAnimatedClip(item.videoPath, item.audio.filePath, clipPath, w, h, fps, clipDuration, tailSilence);
+          await renderAnimatedClip(item.videoPath, item.audio.filePath, clipPath, w, h, fps, clipDuration, tailSilence, item.overlay);
         } else {
           const zoomDirection: "in" | "out" = Math.random() < 0.5 ? "in" : "out";
-          await renderKenBurnsClip(item.imagePath, item.audio.filePath, clipPath, w, h, fps, clipDuration, zoomDirection, tailSilence);
+          await renderKenBurnsClip(item.imagePath, item.audio.filePath, clipPath, w, h, fps, clipDuration, zoomDirection, tailSilence, item.overlay);
         }
         log(
           runId,
@@ -209,6 +219,113 @@ export async function applyAudioTempo(filePath: string, tempo: number): Promise<
   fs.renameSync(tmp, filePath);
 }
 
+// ── On-screen text overlays (hook emphasis) ──────────────────────────────────
+
+let cachedOverlayFont: string | null | undefined; // undefined = not resolved yet
+
+/**
+ * Resolves a bold font file for overlays: the TEXT_OVERLAY_FONT setting if it
+ * exists, else the first bold system font found. Returns null if none exist —
+ * overlays are then silently skipped (they must NEVER fail a render).
+ */
+function resolveOverlayFont(): string | null {
+  if (cachedOverlayFont !== undefined) return cachedOverlayFont;
+  const custom = (getSetting("TEXT_OVERLAY_FONT") || "").trim();
+  const candidates = [
+    custom,
+    "C:/Windows/Fonts/impact.ttf",
+    "C:/Windows/Fonts/ariblk.ttf", // Arial Black
+    "C:/Windows/Fonts/arialbd.ttf", // Arial Bold
+    "C:/Windows/Fonts/seguibl.ttf", // Segoe UI Black
+    "/System/Library/Fonts/Supplemental/Impact.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+  ];
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) {
+      cachedOverlayFont = c;
+      return c;
+    }
+  }
+  cachedOverlayFont = null;
+  return null;
+}
+
+/** Escapes a filesystem path for an ffmpeg filtergraph option value (forward
+ *  slashes + escaped drive colon). The caller wraps the result in single quotes. */
+function escapeFilterPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/:/g, "\\:");
+}
+
+/** Keeps only characters that are safe AND meaningful in a short caption — drops
+ *  anything that could break filtergraph quoting (quotes, colons, braces, etc.). */
+function sanitizeOverlayText(s: string): string {
+  return s
+    .replace(/[^A-Za-z0-9 $%.,+\-]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 16);
+}
+
+/**
+ * Builds a `drawtext` filter that fades a big caption in and out — or null when
+ * there's no usable font/text or the clip is too short to read. Times are LOCAL
+ * to the clip (it starts at t=0). Append to the END of a video filter chain so
+ * it draws on the final WxH frames.
+ */
+function buildOverlayDrawtext(
+  overlay: OverlaySpec | undefined,
+  h: number,
+  durationSec: number
+): string | null {
+  if (!overlay) return null;
+  const text = sanitizeOverlayText(overlay.text);
+  if (!text) return null;
+  if (durationSec < 0.8) return null; // too short to read comfortably
+  const font = resolveOverlayFont();
+  if (!font) return null;
+
+  const hold = Math.min(1.8, durationSec - 0.2);
+  const fade = Math.min(0.35, hold / 2);
+  const t0 = Math.min(Math.max(0, overlay.atSec), Math.max(0, durationSec - hold - 0.05));
+  const t1 = t0 + hold;
+  const f = (n: number) => n.toFixed(2);
+
+  // Piecewise alpha: fade in → hold at 1 → fade out.
+  const alpha =
+    `if(lt(t,${f(t0)}),0,` +
+    `if(lt(t,${f(t0 + fade)}),(t-${f(t0)})/${f(fade)},` +
+    `if(lt(t,${f(t1 - fade)}),1,` +
+    `if(lt(t,${f(t1)}),(${f(t1)}-t)/${f(fade)},0))))`;
+
+  const fontSize = Math.max(28, Math.round(h / 10));
+  const borderW = Math.max(2, Math.round(fontSize / 16));
+
+  return (
+    `drawtext=fontfile='${escapeFilterPath(font)}'` +
+    // expansion=none → the text is taken 100% literally, so "$400", "73%" and
+    // "1,200" render as-is with no %{}/backslash interpretation surprises.
+    `:text='${text}':expansion=none` +
+    `:fontcolor=white:fontsize=${fontSize}` +
+    `:borderw=${borderW}:bordercolor=black@0.9` +
+    `:shadowx=2:shadowy=2:shadowcolor=black@0.5` +
+    `:x=(w-text_w)/2:y=h*0.74` +
+    `:alpha='${alpha}':enable='between(t,${f(t0)},${f(t1)})'`
+  );
+}
+
+/** Appends an overlay drawtext (if any) to an existing video filter chain. */
+function withOverlay(
+  videoFilter: string,
+  overlay: OverlaySpec | undefined,
+  h: number,
+  durationSec: number
+): string {
+  const dt = buildOverlayDrawtext(overlay, h, durationSec);
+  return dt ? `${videoFilter},${dt}` : videoFilter;
+}
+
 /**
  * Ken-Burns clip: still image with a slow zoom plus optional gentle pan.
  */
@@ -221,7 +338,8 @@ function renderKenBurnsClip(
   fps: number,
   durationSec: number,
   direction: "in" | "out",
-  tailSilenceSec: number = 0
+  tailSilenceSec: number = 0,
+  overlay?: OverlaySpec
 ): Promise<void> {
   const totalFrames = Math.max(2, Math.ceil(durationSec * fps));
   const minZoom = 1.0;
@@ -265,7 +383,7 @@ function renderKenBurnsClip(
       .input(imagePath)
       .inputOptions(["-loop 1"])
       .input(audioPath)
-      .videoFilters(filter);
+      .videoFilters(withOverlay(filter, overlay, h, durationSec));
     if (tailSilenceSec > 0) {
       cmd.audioFilters(`apad=pad_dur=${tailSilenceSec.toFixed(3)}`);
     }
@@ -299,7 +417,8 @@ async function renderAnimatedClip(
   h: number,
   fps: number,
   durationSec: number,
-  tailSilenceSec: number = 0
+  tailSilenceSec: number = 0,
+  overlay?: OverlaySpec
 ): Promise<void> {
   const videoDur = await probeDuration(videoPath);
 
@@ -316,6 +435,7 @@ async function renderAnimatedClip(
       videoFilter = `${videoFilter},tpad=stop_mode=clone:stop_duration=${freezeNeeded.toFixed(3)}`;
     }
   }
+  videoFilter = withOverlay(videoFilter, overlay, h, durationSec);
 
   return new Promise((resolve, reject) => {
     const cmd = ffmpeg()
@@ -558,6 +678,8 @@ export interface SingleShotInput {
   kind: "video" | "photo";
   startMs: number;
   endMs: number;
+  /** Optional big fading caption burned into this clip. */
+  overlay?: OverlaySpec;
 }
 
 /**
@@ -618,9 +740,9 @@ export async function assembleSingleShot(
         const durationSec = Math.max(0.1, (item.endMs - item.startMs) / 1000);
         if (item.kind === "photo") {
           const zoomDirection: "in" | "out" = Math.random() < 0.5 ? "in" : "out";
-          await renderSilentKenBurns(item.assetPath, clipPath, w, h, fps, durationSec, zoomDirection);
+          await renderSilentKenBurns(item.assetPath, clipPath, w, h, fps, durationSec, zoomDirection, item.overlay);
         } else {
-          await renderSilentVideo(item.assetPath, clipPath, w, h, fps, durationSec);
+          await renderSilentVideo(item.assetPath, clipPath, w, h, fps, durationSec, item.overlay);
         }
         log(
           runId,
@@ -666,7 +788,8 @@ async function renderSilentVideo(
   w: number,
   h: number,
   fps: number,
-  durationSec: number
+  durationSec: number,
+  overlay?: OverlaySpec
 ): Promise<void> {
   const videoDur = await probeDuration(videoPath);
 
@@ -687,7 +810,7 @@ async function renderSilentVideo(
   return new Promise((resolve, reject) => {
     ffmpeg()
       .input(videoPath)
-      .videoFilters(videoFilter)
+      .videoFilters(withOverlay(videoFilter, overlay, h, durationSec))
       .outputOptions([
         "-an", // drop any audio from the Pexels clip — audio is muxed globally
         `-r ${fps}`,
@@ -716,7 +839,8 @@ function renderSilentKenBurns(
   h: number,
   fps: number,
   durationSec: number,
-  direction: "in" | "out"
+  direction: "in" | "out",
+  overlay?: OverlaySpec
 ): Promise<void> {
   const totalFrames = Math.max(2, Math.ceil(durationSec * fps));
   const minZoom = 1.0;
@@ -759,7 +883,7 @@ function renderSilentKenBurns(
     ffmpeg()
       .input(imagePath)
       .inputOptions(["-loop 1"])
-      .videoFilters(filter)
+      .videoFilters(withOverlay(filter, overlay, h, durationSec))
       .outputOptions([
         "-an", // silent — audio is muxed globally afterwards
         `-r ${fps}`,

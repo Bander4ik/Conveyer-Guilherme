@@ -17,6 +17,13 @@ export interface Scene {
    */
   visual_queries: string[];
   duration_hint_sec: number;
+  /**
+   * Optional short on-screen text to flash for this scene — a striking number,
+   * year, money amount, percentage, or short place name (e.g. "$400", "1998").
+   * Empty/absent for most scenes. Rendered as a big fading caption by assembly
+   * when TEXT_OVERLAY_MODE is on (scoped to the hook by default).
+   */
+  overlay?: string;
 }
 
 /**
@@ -115,12 +122,14 @@ async function processChunk(
     if (queries.length === 0 && legacyPrompt) queries = [legacyPrompt];
     // De-duplicate while preserving order; cap at 3 candidates.
     queries = [...new Set(queries)].slice(0, 3);
+    const overlayRaw = String((s as { overlay?: unknown }).overlay ?? "").trim();
     return {
       index: i,
       text: String(s.text ?? ""),
       visual_prompt: legacyPrompt || queries[0] || "",
       visual_queries: queries,
       duration_hint_sec: Number(s.duration_hint_sec ?? 6),
+      overlay: overlayRaw ? overlayRaw.slice(0, 16) : undefined,
     };
   });
 }
@@ -141,6 +150,7 @@ function enforceMaxSceneLength(scenes: Scene[]): Scene[] {
     }
     const chunkCount = Math.ceil(words.length / MAX_SCENE_WORDS);
     const perChunk = Math.ceil(words.length / chunkCount);
+    let first = true;
     for (let i = 0; i < words.length; i += perChunk) {
       const chunkWords = words.slice(i, i + perChunk);
       out.push({
@@ -152,7 +162,10 @@ function enforceMaxSceneLength(scenes: Scene[]): Scene[] {
         visual_prompt: s.visual_prompt,
         visual_queries: s.visual_queries,
         duration_hint_sec: Math.min(6, Math.max(2, Math.round((chunkWords.length / 150) * 60))),
+        // Keep the overlay on the FIRST chunk only so it isn't shown twice.
+        overlay: first ? s.overlay : undefined,
       });
+      first = false;
     }
   }
   return out.map((s, i) => ({ ...s, index: i }));

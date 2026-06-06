@@ -47,6 +47,11 @@ export const SETTING_KEYS = [
   "TRANSITION_MAX",          // max crossfade length (s); max<=0 → hard cuts (no transitions)
   "SCENE_TAIL_SILENCE",      // silence appended to each clip's audio (seconds)
 
+  // ── On-screen text (hook emphasis) ────────────────────────────────
+  "TEXT_OVERLAY_MODE",       // off | hook (default) | all — pop key numbers/years/places as big text
+  "TEXT_OVERLAY_HOOK_SECONDS", // when mode=hook, only show overlays inside the first N seconds
+  "TEXT_OVERLAY_FONT",       // absolute path to a .ttf/.otf for the overlay; empty = auto-detect a bold system font
+
   // ── Performance / Concurrency ─────────────────────────────────────
   "TTS_CONCURRENCY",         // parallel TTS jobs
   "ANIMATION_CONCURRENCY",   // parallel Pexels jobs
@@ -166,6 +171,13 @@ export const DEFAULTS: Record<SettingKey, string> = {
   TRANSITION_MIN: "0.3",
   TRANSITION_MAX: "0.7",
   SCENE_TAIL_SILENCE: "0.4",
+
+  // On-screen text emphasis. "hook" = pop key numbers/years/places as big text
+  // only in the opening seconds (where it lifts retention without getting noisy).
+  // "all" = whole video, "off" = never. Font auto-detected unless overridden.
+  TEXT_OVERLAY_MODE: "hook",
+  TEXT_OVERLAY_HOOK_SECONDS: "30",
+  TEXT_OVERLAY_FONT: "",
 
   // Performance
   TTS_CONCURRENCY: "3",

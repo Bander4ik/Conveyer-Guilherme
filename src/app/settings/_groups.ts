@@ -228,6 +228,30 @@ export const ALL_GROUPS: Group[] = [
     ],
   },
   {
+    title: "On-Screen Text (hook emphasis)",
+    subtitle: "Optionally flash a big caption on screen when the narration hits a striking number, year, money amount, percentage, or place — like \"$400\" or \"1998\". The app detects these automatically from the script. To avoid clutter it's limited to the opening of the video by default.",
+    fields: [
+      {
+        key: "TEXT_OVERLAY_MODE",
+        label: "When to show captions",
+        desc: "• 'hook' (default) — only in the first seconds of the video (set below), where punchy on-screen numbers lift retention without getting noisy.\n\n• 'all' — anywhere a striking number/year/place is spoken across the whole video.\n\n• 'off' — never show captions.\n\nThe text fades in and out, centered low on the frame, and is timed to the moment the word is spoken (smooth-voice mode). At most 4 captions are shown so it never feels spammy.",
+        examples: "hook (default)  ·  all  ·  off",
+      },
+      {
+        key: "TEXT_OVERLAY_HOOK_SECONDS",
+        label: "Hook length (seconds)",
+        desc: "Only used when the mode above is 'hook'. Captions appear only for words spoken within this many seconds from the start.",
+        examples: "30 = default  ·  15 = just the very opening  ·  60 = first minute",
+      },
+      {
+        key: "TEXT_OVERLAY_FONT",
+        label: "Caption font (optional)",
+        desc: "Absolute path to a bold .ttf/.otf font for the captions. Leave EMPTY to auto-pick a bold system font (Impact / Arial Black on Windows, Arial Bold / Impact on Mac). Set this only if you want a specific look or the auto-pick can't find a font.",
+        examples: "Windows: C:\\Windows\\Fonts\\impact.ttf  ·  Mac: /Library/Fonts/YourFont.ttf  ·  empty = auto",
+      },
+    ],
+  },
+  {
     title: "Performance (Concurrency)",
     subtitle: "How many parallel jobs and FFmpeg renders to run at once.",
     fields: [

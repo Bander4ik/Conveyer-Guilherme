@@ -27,6 +27,7 @@ For EACH scene, return a JSON object with:
     • Give 2–3 genuinely DIFFERENT angles (not the same words reworded) so if the first finds nothing, the next still fits — e.g. ["pharmacy shopping basket", "hand picking medicine shelf", "drugstore aisle"].
     • Use plain concrete nouns that exist as stock footage ("rusty tools workbench", "city street night", "ocean waves rocks"). NO abstract words ("concept", "idea", "tradition", "natural"), NO brand names, NO specific real people.
 - "duration_hint_sec": approximate audio length (number, 4–8).
+- "overlay" (OPTIONAL): include this field ONLY when the line contains a STRIKING, concrete number, money amount, year, percentage, or short place name worth flashing on screen as big text. The value is the EXACT short text to display, copied as spoken (e.g. "$400", "1998", "73%", "Texas"). Keep it ≤ 12 characters. Use it SPARINGLY — a few per script at most, ideally in the opening lines. If the line has no such striking token, OMIT the field entirely (do not output an empty string).
 
 Return a STRICTLY valid JSON array — no markdown, no explanations.`,
 };
@@ -36,7 +37,7 @@ Return a STRICTLY valid JSON array — no markdown, no explanations.`,
  * re-seeds existing installs to the new default once (there is no prompt-edit UI,
  * so the stored row is always our seeded default — safe to overwrite).
  */
-const SCENE_SPLIT_VERSION = "3";
+const SCENE_SPLIT_VERSION = "4";
 
 const getStmt = db.prepare("SELECT content FROM prompts WHERE name = ?");
 const upsertStmt = db.prepare(
