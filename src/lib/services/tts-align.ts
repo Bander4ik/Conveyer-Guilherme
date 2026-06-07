@@ -19,6 +19,13 @@ export interface SceneAudioRange {
   sceneIdx: number;
   startMs: number;
   endMs: number;
+  /**
+   * For scenes that carry an `overlay` token, the audio time (ms) when that
+   * token is actually SPOKEN — taken from the matched Whisper word when found,
+   * else estimated from the token's word position in the scene. Lets the
+   * assembler pop the caption exactly on the word instead of mid-scene.
+   */
+  overlayAtMs?: number;
 }
 
 /** Result of synthesize-then-align: one mp3 + per-scene timing. */
@@ -270,15 +277,44 @@ function alignScenesToTranscript(
   transcript: TranscriptWord[],
   totalDurationMs: number
 ): SceneAudioRange[] {
-  type SourceWord = { sceneIdx: number; norm: string };
+  // Precompute, for each scene that has an overlay token, WHICH word in the
+  // scene text is the token (by normalized match of the token's first word) so
+  // we can capture exactly when it's spoken.
+  const overlayAnchorByScene = new Map<number, { idxInScene: number; wordCount: number }>();
+  for (const s of scenes) {
+    const ov = (s.overlay || "").trim();
+    if (!ov) continue;
+    const target = normWord(ov.split(/\s+/)[0] || ov);
+    if (!target) continue;
+    const norms = s.text.split(/\s+/).map(normWord).filter(Boolean);
+    let idx = norms.findIndex((n) => n === target);
+    if (idx < 0) idx = norms.findIndex((n) => n.includes(target) || target.includes(n));
+    overlayAnchorByScene.set(s.index, {
+      idxInScene: idx >= 0 ? idx : 0,
+      wordCount: Math.max(1, norms.length),
+    });
+  }
+
+  type SourceWord = { sceneIdx: number; norm: string; overlayAnchor: boolean };
   const sourceWords: SourceWord[] = [];
   for (const s of scenes) {
+    const anchor = overlayAnchorByScene.get(s.index);
+    let wi = -1;
     for (const w of s.text.split(/\s+/)) {
       const n = normWord(w);
-      if (n) sourceWords.push({ sceneIdx: s.index, norm: n });
+      if (!n) continue;
+      wi++;
+      sourceWords.push({
+        sceneIdx: s.index,
+        norm: n,
+        overlayAnchor: anchor != null && wi === anchor.idxInScene,
+      });
     }
   }
   const normTrans = transcript.map((t) => ({ ...t, norm: normWord(t.word) }));
+
+  // Exact spoken time of each scene's overlay token, captured during matching.
+  const overlayAtByScene = new Map<number, number>();
 
   const startByScene = new Map<number, number>();
   const endByScene = new Map<number, number>();
@@ -309,6 +345,9 @@ function alignScenesToTranscript(
     const tw = normTrans[found];
     if (!startByScene.has(sw.sceneIdx)) startByScene.set(sw.sceneIdx, tw.startMs);
     endByScene.set(sw.sceneIdx, tw.endMs);
+    if (sw.overlayAnchor && !overlayAtByScene.has(sw.sceneIdx)) {
+      overlayAtByScene.set(sw.sceneIdx, tw.startMs);
+    }
     tCursor = found + 1;
   }
 
@@ -402,6 +441,19 @@ function alignScenesToTranscript(
     const last = raw[raw.length - 1];
     if (last.startMs >= totalDurationMs) last.startMs = Math.max(0, totalDurationMs - 1);
     last.endMs = totalDurationMs;
+  }
+
+  // Pin each overlay token to its spoken moment: the exact matched-word time if
+  // Whisper aligned it, else estimated from the token's word position within the
+  // scene. The assembler pops the caption here instead of mid-scene.
+  for (const r of raw) {
+    const a = overlayAnchorByScene.get(r.sceneIdx);
+    if (!a) continue;
+    const exact = overlayAtByScene.get(r.sceneIdx);
+    r.overlayAtMs =
+      exact != null
+        ? exact
+        : Math.round(r.startMs + (a.idxInScene / a.wordCount) * (r.endMs - r.startMs));
   }
 
   return raw;

@@ -419,8 +419,11 @@ function assignTextOverlays(
     if (!text) continue;
     const range = rangeByScene.get(scene.index);
     if (!range) continue;
-    if (mode === "hook" && range.startMs >= hookMs) continue;
-    candidates.push({ text, atMs: (range.startMs + range.endMs) / 2 });
+    // Use the token's actual spoken time (from Whisper word-alignment); fall
+    // back to the scene midpoint only if alignment couldn't place it.
+    const atMs = range.overlayAtMs ?? (range.startMs + range.endMs) / 2;
+    if (mode === "hook" && atMs >= hookMs) continue;
+    candidates.push({ text, atMs });
   }
   candidates.sort((a, b) => a.atMs - b.atMs);
   const chosen = candidates.slice(0, MAX_OVERLAYS);
@@ -431,7 +434,8 @@ function assignTextOverlays(
       plans.find((p) => ov.atMs >= p.startMs && ov.atMs < p.endMs) ??
       plans.find((p) => ov.atMs >= p.startMs && ov.atMs <= p.endMs);
     if (plan && !plan.overlay) {
-      plan.overlay = { text: ov.text, atSec: Math.max(0, (ov.atMs - plan.startMs) / 1000) };
+      // Small lead-in so the caption is already up the instant the word lands.
+      plan.overlay = { text: ov.text, atSec: Math.max(0, (ov.atMs - plan.startMs) / 1000 - 0.12) };
       applied.push(ov.text);
     }
   }

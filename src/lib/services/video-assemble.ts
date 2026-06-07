@@ -286,9 +286,12 @@ function buildOverlayDrawtext(
   const font = resolveOverlayFont();
   if (!font) return null;
 
-  const hold = Math.min(1.8, durationSec - 0.2);
-  const fade = Math.min(0.35, hold / 2);
-  const t0 = Math.min(Math.max(0, overlay.atSec), Math.max(0, durationSec - hold - 0.05));
+  // Anchor the caption AT the spoken moment (overlay.atSec). Only clamp so at
+  // least ~0.5s remains in the clip; the hold then shrinks to fit rather than
+  // sliding the caption earlier — so it stays on the word even near a clip end.
+  const t0 = Math.min(Math.max(0, overlay.atSec), Math.max(0, durationSec - 0.5));
+  const hold = Math.max(0.5, Math.min(1.8, durationSec - t0 - 0.05));
+  const fade = Math.min(0.3, hold / 2.5);
   const t1 = t0 + hold;
   const f = (n: number) => n.toFixed(2);
 
