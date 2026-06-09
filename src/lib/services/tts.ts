@@ -5,6 +5,7 @@ import { getSetting } from "../settings";
 import { log } from "../logger";
 import type { Scene } from "./scene-split";
 import { createTtsTask, pollTask, downloadTask } from "./ai33pro";
+import { createV3SpeechTask, pollV3Task, downloadV3Task } from "./ai33pro";
 import { createTtsJob, pollJob, downloadJob } from "./labs69";
 import { probeDurationSafe, applyAudioTempo, resolveFfmpegBinary } from "./video-assemble";
 
@@ -41,10 +42,16 @@ type TtsOptions = Record<string, never>;
  * If both keys are set, TTS_PROVIDER is respected. Exported so the pipeline can
  * show the user which engine is live.
  */
-export function resolveTtsProvider(): "ai33pro" | "69labs" {
+export function resolveTtsProvider(): "ai33pro" | "69labs" | "kokoro" {
   const selected = (getSetting("TTS_PROVIDER") || "ai33pro").toLowerCase();
   const hasAi33 = getSetting("AI33PRO_API_KEY").trim().length > 0;
   const has69 = getSetting("LABS69_API_KEY").trim().length > 0;
+  if (selected === "kokoro") {
+    // Kokoro runs on the ai33.pro key (it's the ai33.pro V3 API). If that key is
+    // missing but 69labs is set, fall back so narration still works; otherwise
+    // stay on kokoro (a clear "AI33PRO_API_KEY not set" error surfaces later).
+    return hasAi33 || !has69 ? "kokoro" : "69labs";
+  }
   if (selected === "69labs") {
     return has69 || !hasAi33 ? "69labs" : "ai33pro";
   }
@@ -60,6 +67,8 @@ async function dispatchTts(
   const provider = resolveTtsProvider();
   if (provider === "69labs") {
     await labs69Tts(runId, text, outPath);
+  } else if (provider === "kokoro") {
+    await kokoroTts(runId, text, outPath);
   } else {
     await ai33proTts(runId, text, outPath);
   }
@@ -169,6 +178,50 @@ async function labs69Tts(runId: string, text: string, outPath: string): Promise<
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * Kokoro TTS via the ai33.pro V3 unified API. Kokoro is a different, ~50% cheaper
+ * model with its OWN voices (kokoro_af_heart, kokoro_am_adam, …) — NOT ElevenLabs
+ * ids. It exposes a NATIVE speed (0.5–1.5), so TTS_SPEED is passed in-request and
+ * we do NOT run atempo afterwards (doing both would double-slow the voice). Uses
+ * the same AI33PRO_API_KEY as the ElevenLabs ai33pro path.
+ */
+async function kokoroTts(runId: string, text: string, outPath: string): Promise<void> {
+  const voiceId = resolveKokoroVoiceId(getSetting("TTS_VOICE_ID") || "");
+  const speedRaw = parseFloat(getSetting("TTS_SPEED") || "1");
+  const speed = Number.isFinite(speedRaw) ? clamp(speedRaw, 0.5, 1.5) : 1;
+
+  const taskId = await createV3SpeechTask(text, { voiceId, speed, withTranscript: false });
+  log(runId, "debug", `Kokoro TTS task ${taskId.slice(0, 8)}… (${voiceId}, speed=${speed})`, {
+    stage: "tts",
+  });
+
+  let task;
+  try {
+    task = await pollV3Task(taskId, runId, "tts");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `${msg} — check the Kokoro voice "${voiceId}" is valid for this ai33.pro account.`
+    );
+  }
+  await downloadV3Task(task, outPath);
+  // NOTE: no applyAudioTempo here — speed is native (passed in the request above).
+}
+
+/**
+ * Normalizes a Kokoro voice id to the ai33.pro V3 `kokoro_<voice>` form. Accepts a
+ * bare Kokoro voice ("af_heart"), the already-prefixed form ("kokoro_af_heart"),
+ * or a mistakenly-pasted other-provider prefix (swapped for kokoro_). Empty input
+ * → a sensible default so it works out of the box.
+ */
+function resolveKokoroVoiceId(raw: string): string {
+  let v = raw.trim();
+  if (!v) return "kokoro_af_heart";
+  v = v.replace(/^(elevenlabs_|minimax_|clone_|edge_)/i, "");
+  if (!/^kokoro_/i.test(v)) v = `kokoro_${v}`;
+  return v;
 }
 
 /**

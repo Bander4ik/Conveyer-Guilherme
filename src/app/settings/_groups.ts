@@ -79,14 +79,14 @@ export const ALL_GROUPS: Group[] = [
     ],
   },
   {
-    title: "Voice Over — engine: ai33.pro OR 69labs (ElevenLabs voices)",
-    subtitle: "Pick the voice engine and paste its key here. ai33.pro and 69labs serve the SAME ElevenLabs voices — they're just two gateways, so use whichever you have. The run log prints which engine is actually live (e.g. \"Voice engine: 69labs\") so you always see what's being used.",
+    title: "Voice Over — ai33.pro (ElevenLabs / Kokoro) OR 69labs",
+    subtitle: "Pick the voice engine and paste its key here. ai33.pro and 69labs serve the SAME ElevenLabs voices (two gateways — use whichever you have). ai33.pro ALSO offers Kokoro — a different, ~50% cheaper model with its OWN voices. The run log prints which engine is actually live (e.g. \"Voice engine: kokoro\") so you always see what's being used.",
     fields: [
       {
         key: "TTS_PROVIDER",
-        label: "Voice engine — ai33.pro or 69labs",
-        desc: "Which service generates the voice. Both use the SAME ElevenLabs voice you pick below.\n\n• 'ai33pro' (default) — via the ai33.pro proxy. Uses the ai33.pro key below.\n\n• '69labs' — the same ElevenLabs voice through the 69labs gateway. Uses the 69labs key below.\n\nVoice id / model / speed apply to BOTH — no need to change them when you switch. SMART: you don't even have to set this exactly right — if you only fill ONE of the two keys below, the app uses that engine automatically. Whichever engine ends up active is printed in the run log.",
-        examples: "ai33pro (default)  ·  69labs",
+        label: "Voice engine — ai33pro / 69labs / kokoro",
+        desc: "Which service + model generates the voice.\n\n• 'ai33pro' (default) — ElevenLabs voice via the ai33.pro proxy. Uses the ai33.pro key below.\n\n• '69labs' — the SAME ElevenLabs voice through the 69labs gateway. Uses the 69labs key below.\n\n• 'kokoro' — the Kokoro model on ai33.pro: ~50% cheaper, but a DIFFERENT voice set (NOT ElevenLabs). Uses the ai33.pro key. When you pick kokoro, set the voice field below to a Kokoro voice (e.g. af_heart).\n\nModel id / similarity don't apply to kokoro; speed DOES. SMART: if you fill only ONE of the ai33.pro / 69labs keys, ai33pro vs 69labs is auto-picked. Whichever engine ends up active is printed in the run log.",
+        examples: "ai33pro (default)  ·  69labs  ·  kokoro (cheaper, Kokoro voices)",
       },
       {
         key: "AI33PRO_API_KEY",
@@ -108,9 +108,9 @@ export const ALL_GROUPS: Group[] = [
       },
       {
         key: "TTS_VOICE_ID",
-        label: "ElevenLabs voice id",
-        desc: "The ElevenLabs voice id for narration — a short alphanumeric string like KeU8nqWFDbaoi0QVUjD3. IMPORTANT: paste just the ID. The ai33.pro dashboard shows voices as 'elevenlabs_<id>' — if you copy that whole thing the app strips the 'elevenlabs_' prefix for you, but the real id is only the part after it. A wrong/prefixed id makes the service fall back to a DEFAULT voice (output won't match what you picked).",
-        examples: "KeU8nqWFDbaoi0QVUjD3  ·  JBFqnCBsd6RMkjVDRZzb (George)  ·  NOT elevenlabs_KeU8... (prefix is auto-removed)",
+        label: "Voice id (ElevenLabs or Kokoro)",
+        desc: "The narration voice. WHICH kind depends on the engine above:\n\n• ai33pro / 69labs (ElevenLabs) → an ElevenLabs voice id like KeU8nqWFDbaoi0QVUjD3. Paste just the ID; the ai33.pro dashboard shows them as 'elevenlabs_<id>' and the app strips that prefix for you.\n\n• kokoro → a Kokoro voice name like af_heart, am_adam, af_bella (af_ = female, am_ = male). The app adds the 'kokoro_' prefix automatically. Leave blank and it defaults to af_heart.\n\nA wrong id makes the service fall back to a DEFAULT voice (output won't match what you picked).",
+        examples: "ElevenLabs: KeU8nqWFDbaoi0QVUjD3  ·  Kokoro: af_heart, am_adam, af_bella",
       },
       {
         key: "TTS_MODEL",
