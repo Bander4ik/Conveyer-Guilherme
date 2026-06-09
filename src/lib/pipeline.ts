@@ -434,8 +434,10 @@ function assignTextOverlays(
       plans.find((p) => ov.atMs >= p.startMs && ov.atMs < p.endMs) ??
       plans.find((p) => ov.atMs >= p.startMs && ov.atMs <= p.endMs);
     if (plan && !plan.overlay) {
-      // Small lead-in so the caption is already up the instant the word lands.
-      plan.overlay = { text: ov.text, atSec: Math.max(0, (ov.atMs - plan.startMs) / 1000 - 0.12) };
+      // Lead-in: start slightly BEFORE the word so the (now near-instant) pop is
+      // fully up by the word's first sound — Whisper marks word starts a touch
+      // late, so this compensates and makes it feel exactly on the number.
+      plan.overlay = { text: ov.text, atSec: Math.max(0, (ov.atMs - plan.startMs) / 1000 - 0.15) };
       applied.push(ov.text);
     }
   }

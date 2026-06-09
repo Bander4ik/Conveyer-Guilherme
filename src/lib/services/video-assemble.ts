@@ -291,16 +291,20 @@ function buildOverlayDrawtext(
   // sliding the caption earlier — so it stays on the word even near a clip end.
   const t0 = Math.min(Math.max(0, overlay.atSec), Math.max(0, durationSec - 0.5));
   const hold = Math.max(0.5, Math.min(1.8, durationSec - t0 - 0.05));
-  const fade = Math.min(0.3, hold / 2.5);
+  // Snappy pop-IN (near-instant) so the caption lands ON the word — a slow
+  // fade-in is what made it FEEL late even when the timing was correct. The
+  // fade-OUT stays gentle.
+  const fadeIn = Math.min(0.08, hold / 4);
+  const fadeOut = Math.min(0.3, hold / 3);
   const t1 = t0 + hold;
   const f = (n: number) => n.toFixed(2);
 
-  // Piecewise alpha: fade in → hold at 1 → fade out.
+  // Piecewise alpha: quick pop in → hold at 1 → gentle fade out.
   const alpha =
     `if(lt(t,${f(t0)}),0,` +
-    `if(lt(t,${f(t0 + fade)}),(t-${f(t0)})/${f(fade)},` +
-    `if(lt(t,${f(t1 - fade)}),1,` +
-    `if(lt(t,${f(t1)}),(${f(t1)}-t)/${f(fade)},0))))`;
+    `if(lt(t,${f(t0 + fadeIn)}),(t-${f(t0)})/${f(fadeIn)},` +
+    `if(lt(t,${f(t1 - fadeOut)}),1,` +
+    `if(lt(t,${f(t1)}),(${f(t1)}-t)/${f(fadeOut)},0))))`;
 
   const fontSize = Math.max(28, Math.round(h / 10));
   const borderW = Math.max(2, Math.round(fontSize / 16));
