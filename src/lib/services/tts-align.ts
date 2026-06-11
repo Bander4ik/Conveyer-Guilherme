@@ -4,7 +4,7 @@ import path from "node:path";
 import { getSetting } from "../settings";
 import { log } from "../logger";
 import { synthesizeFullScript } from "./tts";
-import { downsampleForTranscription } from "./video-assemble";
+import { downsampleForTranscription, capPauses, probeDurationSafe } from "./video-assemble";
 import type { Scene } from "./scene-split";
 
 /** One transcribed word from Whisper, in milliseconds. */
@@ -82,20 +82,46 @@ export async function synthesizeAndAlign(
     `Single-shot TTS — one continuous voiceover for ${scenes.length} scenes (${fullText.length} chars)`,
     { stage: "tts_align" }
   );
-  const { durationSec } = await synthesizeFullScript(runId, fullText, audioPath, {});
+  const synth = await synthesizeFullScript(runId, fullText, audioPath, {});
+  let audioDurationSec = synth.durationSec;
+
+  // 1b. Cap over-long pauses. Single-shot is one continuous take with no other
+  //     pause knob (SCENE_TAIL_SILENCE is per-scene only), so this is where we
+  //     tame the long gaps between sentences / at chunk seams. MAX_PAUSE_SECONDS
+  //     <= 0 disables it. Done BEFORE transcription so Whisper timings match the
+  //     final (capped) audio.
+  const maxPause = parseFloat(getSetting("MAX_PAUSE_SECONDS") || "0");
+  if (Number.isFinite(maxPause) && maxPause > 0) {
+    try {
+      await capPauses(audioPath, maxPause);
+      const capped = await probeDurationSafe(audioPath);
+      log(
+        runId,
+        "info",
+        `Pauses capped to ≤${maxPause}s (voiceover ${audioDurationSec.toFixed(1)}s → ${capped.toFixed(1)}s)`,
+        { stage: "tts_align" }
+      );
+      audioDurationSec = capped;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log(runId, "warn", `Pause-cap skipped (using original audio): ${msg.slice(0, 150)}`, {
+        stage: "tts_align",
+      });
+    }
+  }
 
   // 2. Word-level transcription via Groq Whisper.
   log(
     runId,
     "info",
-    `Transcribing ${durationSec.toFixed(1)}s with Groq Whisper (whisper-large-v3, word timestamps)`,
+    `Transcribing ${audioDurationSec.toFixed(1)}s with Groq Whisper (whisper-large-v3, word timestamps)`,
     { stage: "tts_align" }
   );
   const transcript = await transcribeWithGroqWhisper(runId, audioPath);
   log(runId, "info", `Groq Whisper returned ${transcript.length} words`, { stage: "tts_align" });
 
   // 3. Align scene texts to transcript timestamps.
-  const totalDurationMs = Math.round(durationSec * 1000);
+  const totalDurationMs = Math.round(audioDurationSec * 1000);
   const ranges = alignScenesToTranscript(scenes, transcript, totalDurationMs);
   const aligned = ranges.filter((r) => r.endMs > r.startMs + 1).length;
   log(
@@ -105,7 +131,7 @@ export async function synthesizeAndAlign(
     { stage: "tts_align" }
   );
 
-  return { filePath: audioPath, durationSec, ranges };
+  return { filePath: audioPath, durationSec: audioDurationSec, ranges };
 }
 
 /**

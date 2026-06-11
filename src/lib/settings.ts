@@ -30,6 +30,7 @@ export const SETTING_KEYS = [
   "TTS_MODE",                // single-shot (default) | per-scene. Single-shot synthesizes ONE continuous voiceover for the whole script then aligns scene boundaries via Groq Whisper word-timestamps — fixes mid-sentence pauses at scene boundaries.
   "MAX_CLIP_SECONDS",        // single-shot: max length of one b-roll clip (seconds). Longer scene ranges are split into equal sub-clips, each with its own Pexels asset. 0 = disabled (one clip per scene).
   "MIN_SCENE_SECONDS",       // single-shot: minimum seconds a visual stays on screen. Scenes shorter than this are merged with the next (keeping the first scene's footage) so the picture doesn't flip every 1-2s.
+  "MAX_PAUSE_SECONDS",       // single-shot: cap every silence in the continuous voiceover to this many seconds (tames over-long pauses between sentences / at chunk seams). 0 = off.
 
   // ── Stock footage (Pexels) ────────────────────────────────────────
   "STOCK_FOOTAGE_ORIENTATION", // landscape | portrait | square
@@ -153,6 +154,10 @@ export const DEFAULTS: Record<SettingKey, string> = {
   // (stops the 1-2s "jumping on every word" look). Pairs with MAX_CLIP_SECONDS=7
   // → visuals land in a calm ~3–7s range.
   MIN_SCENE_SECONDS: "3",
+  // Cap any silence in the single-shot voiceover to 0.6s. Trims the over-long
+  // gaps (sentence pauses, chunk-seam silence) while leaving natural short
+  // pauses alone. 0 disables it (keep the raw TTS pacing).
+  MAX_PAUSE_SECONDS: "0.6",
 
   // Stock footage (Pexels) — defaults match a typical long-form 16:9 channel.
   STOCK_FOOTAGE_ORIENTATION: "landscape",

@@ -136,6 +136,12 @@ export const ALL_GROUPS: Group[] = [
         desc: "Smooth-voice mode only. Keeps the picture moving: if a segment's narration runs longer than this, the app fetches SEVERAL different Pexels clips for it (each this many seconds) instead of stretching or freezing one clip. Lower = more visual variety, more Pexels usage. Set to 0 to use just one clip per segment no matter how long.",
         examples: "7 = default  ·  5 = livelier / more cuts  ·  0 = one clip per segment",
       },
+      {
+        key: "MAX_PAUSE_SECONDS",
+        label: "Max pause between sentences (s)",
+        desc: "Smooth-voice mode only — and THIS is the pause control for it. The voiceover is one continuous take, so gaps can only be shortened by trimming them afterwards. This caps every silence — the pauses between sentences, and the small gaps where a long script was voiced in pieces — to this many seconds. Shorter pauses are left alone (the rhythm stays natural); only the over-long gaps get trimmed. Lower = tighter, snappier narration. Set to 0 to keep the voice engine's raw pacing. NOTE: the 'Pause between scenes' setting further down does NOTHING in smooth-voice mode — this is the one that works.",
+        examples: "0.6 = default  ·  0.4 = tighter  ·  0.3 = very snappy  ·  0 = off (raw pacing)",
+      },
     ],
   },
   {

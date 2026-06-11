@@ -60,10 +60,15 @@ export function resolveTtsProvider(): "ai33pro" | "69labs" | "kokoro" {
 
 async function dispatchTts(
   runId: string,
-  text: string,
+  rawText: string,
   outPath: string,
   _options: TtsOptions = {}
 ): Promise<void> {
+  // Collapse line breaks / tabs / runs of spaces to a single space. TTS engines
+  // turn a literal newline (common in pasted scripts) into a LONG pause, which
+  // reads as an unwanted gap between sentences — normalizing removes that cause
+  // without changing any words. (Pause MARKERS like Kokoro's `*` are untouched.)
+  const text = rawText.replace(/\s+/g, " ").trim();
   const provider = resolveTtsProvider();
   if (provider === "69labs") {
     await labs69Tts(runId, text, outPath);

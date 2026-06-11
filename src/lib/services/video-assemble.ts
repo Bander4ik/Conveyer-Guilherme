@@ -219,6 +219,34 @@ export async function applyAudioTempo(filePath: string, tempo: number): Promise<
   fs.renameSync(tmp, filePath);
 }
 
+/**
+ * Caps every silence in `filePath` to at most `maxPauseSec` seconds, in place.
+ *
+ * Single-shot voiceover is ONE continuous take, so there's no per-scene gap knob
+ * (SCENE_TAIL_SILENCE only affects per-scene mode). Over-long pauses there come
+ * from the TTS engine's own sentence pauses and from silence at chunk seams when
+ * a long script is synthesized in pieces. `silenceremove` with stop_silence caps
+ * each silent stretch to maxPauseSec and leaves SHORTER pauses untouched — so the
+ * natural rhythm stays, only the excessively long gaps get trimmed. Speech/pitch
+ * are not altered. Verified: a 1.2s gap → ~maxPauseSec.
+ */
+export async function capPauses(filePath: string, maxPauseSec: number): Promise<void> {
+  ensureFfmpegPaths();
+  const cap = Math.max(0.05, maxPauseSec);
+  const tmp = `${filePath}.pausecap.mp3`;
+  await new Promise<void>((resolve, reject) => {
+    ffmpeg()
+      .input(filePath)
+      .audioFilters(`silenceremove=stop_periods=-1:stop_threshold=-40dB:stop_silence=${cap.toFixed(3)}`)
+      .outputOptions(["-c:a libmp3lame", "-q:a 4"])
+      .on("error", reject)
+      .on("end", () => resolve())
+      .save(tmp);
+  });
+  fs.rmSync(filePath, { force: true });
+  fs.renameSync(tmp, filePath);
+}
+
 // ── On-screen text overlays (hook emphasis) ──────────────────────────────────
 
 let cachedOverlayFont: string | null | undefined; // undefined = not resolved yet
