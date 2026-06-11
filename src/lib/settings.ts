@@ -33,6 +33,7 @@ export const SETTING_KEYS = [
   "MAX_PAUSE_SECONDS",       // single-shot: cap every silence in the continuous voiceover to this many seconds (tames over-long pauses between sentences / at chunk seams). 0 = off.
 
   // ── Stock footage (Pexels) ────────────────────────────────────────
+  "FOOTAGE_MATCH_STRICTNESS",  // off | normal (default) | strict — score each Pexels candidate's own description against the scene's queries; skip off-topic ones, fall through query 2/3, then best-available. A scene never fails because of this.
   "STOCK_FOOTAGE_ORIENTATION", // landscape | portrait | square
   "STOCK_FOOTAGE_MAX_HEIGHT",  // 720 | 1080 | 2160 — caps file size
   "STOCK_FOOTAGE_MIN_DURATION", // seconds — skip stingers shorter than this
@@ -160,6 +161,10 @@ export const DEFAULTS: Record<SettingKey, string> = {
   MAX_PAUSE_SECONDS: "0.6",
 
   // Stock footage (Pexels) — defaults match a typical long-form 16:9 channel.
+  // Reject candidates whose own description shares nothing with our search
+  // (the "searched pharmacy basket, got a bathroom basket" fix). Safe default:
+  // worst case it falls back to the best available clip, never fails a scene.
+  FOOTAGE_MATCH_STRICTNESS: "normal",
   STOCK_FOOTAGE_ORIENTATION: "landscape",
   STOCK_FOOTAGE_MAX_HEIGHT: "1080",
   STOCK_FOOTAGE_MIN_DURATION: "4",

@@ -157,6 +157,12 @@ export const ALL_GROUPS: Group[] = [
         maxLength: 300,
       },
       {
+        key: "FOOTAGE_MATCH_STRICTNESS",
+        label: "Footage match strictness",
+        desc: "How picky the app is about whether a found clip ACTUALLY matches the scene. Pexels describes every clip (e.g. 'woman shopping in a pharmacy') — the app reads that description and scores it against the scene's search queries. Clips that share nothing with what we asked for are SKIPPED and the scene's other queries are tried instead.\n\n• 'normal' (default) — rejects clearly off-topic clips (the 'searched pharmacy basket, got a bathroom basket' case).\n• 'strict' — demands a stronger match. Better aim, but on rare topics it falls back to 'best available' more often.\n• 'off' — old behavior: always trust Pexels' first result.\n\nA scene NEVER fails because of this: if nothing matches well anywhere, the app logs a warning and uses the best clip it found. The run log shows the score of every chosen clip (e.g. 'match 0.67').",
+        examples: "normal (default)  ·  strict = better aim, more fallbacks  ·  off = trust Pexels' #1",
+      },
+      {
         key: "STOCK_FOOTAGE_ORIENTATION",
         label: "Orientation",
         desc: "Which clip orientations Pexels returns. `landscape` for 16:9 long-form YouTube. `portrait` for 9:16 Shorts/TikTok/Reels. `square` for 1:1.",

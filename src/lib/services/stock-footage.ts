@@ -458,6 +458,74 @@ function sceneQueryCandidates(scene: Scene): string[] {
   return [...new Set(cleaned)];
 }
 
+// ── Relevance scoring (local, zero extra API calls) ──────────────────────────
+//
+// Pexels already tells us what each candidate depicts: a video's page URL ends
+// in a descriptive slug ("…/video/a-woman-shopping-in-a-pharmacy-855386/") and
+// a photo carries an `alt` sentence. We score every candidate against the
+// scene's search queries and skip ones that share nothing with what we asked
+// for — that's what stops a "pharmacy shopping basket" search from silently
+// using a wicker basket on a bathroom shelf just because Pexels ranked it #1.
+
+const RELEVANCE_STOPWORDS = new Set([
+  "a", "an", "the", "of", "in", "on", "at", "and", "or", "with", "to", "for",
+  "by", "from", "is", "are", "this", "that", "over", "under", "into", "near",
+  "his", "her", "its", "their", "video", "photo", "footage", "stock", "free",
+]);
+
+function relevanceTokens(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 3 && !RELEVANCE_STOPWORDS.has(t));
+}
+
+/** Descriptive words of a Pexels page URL ("…/video/a-woman-shopping-in-a-pharmacy-855386/"
+ *  → woman, shopping, pharmacy). Returns [] when the URL has no usable slug. */
+function pexelsSlugTokens(pageUrl: string): string[] {
+  try {
+    const segs = new URL(pageUrl).pathname.split("/").filter(Boolean);
+    const slug = (segs[segs.length - 1] ?? "").replace(/-\d+$/, "");
+    return relevanceTokens(slug.replace(/-/g, " "));
+  } catch {
+    return [];
+  }
+}
+
+/** Loose word match so "shopping" pairs with "shop", "waves" with "wave":
+ *  exact, or one is a ≥4-char prefix of the other. */
+function tokensMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 4) return false;
+  return a.startsWith(b) || b.startsWith(a);
+}
+
+/**
+ * 0..1: how much of ONE of the scene's queries this candidate's description
+ * covers (the best-matching query wins). 1 = every meaningful word of a query
+ * is present; 0 = shares nothing with any query, or has no description at all.
+ */
+function relevanceScore(candTokens: string[], queryTokenLists: string[][]): number {
+  if (candTokens.length === 0) return 0;
+  let best = 0;
+  for (const q of queryTokenLists) {
+    if (q.length === 0) continue;
+    let hit = 0;
+    for (const t of q) if (candTokens.some((c) => tokensMatch(c, t))) hit++;
+    if (hit / q.length > best) best = hit / q.length;
+  }
+  return best;
+}
+
+/** FOOTAGE_MATCH_STRICTNESS → minimum relevance score. 0 = scoring off. */
+function relevanceThreshold(): number {
+  const v = (getSetting("FOOTAGE_MATCH_STRICTNESS") || "normal").trim().toLowerCase();
+  if (v === "off") return 0;
+  if (v === "strict") return 0.6;
+  return 0.34; // "normal" — kills shares-nothing / one-word-of-three matches
+}
+
 export interface AcquireOptions {
   runId: string;
   orientation?: Orientation;
@@ -499,10 +567,58 @@ export async function acquireStockClipForScene(
     throw new Error(`Scene #${scene.index}: empty Pexels query (no visual_queries)`);
   }
 
+  const threshold = relevanceThreshold();
+  const queryTokenLists = candidates.map(relevanceTokens);
+  type ScoredVideo = { video: PexelsVideo; score: number; hasDesc: boolean; query: string };
+  // Below-threshold candidates from every query — the last-resort pool, so a
+  // scene never FAILS because nothing scored well (an off-topic clip beats a hole).
+  const reserve: ScoredVideo[] = [];
   let lastErr: unknown;
-  // Try each query candidate in order. The first that returns a downloadable,
-  // non-duplicate clip wins — so a weak/empty first query falls back instead of
-  // failing the scene.
+
+  // Try downloading from a scored list (best first), honouring the shared dedup
+  // set. Returns null when every entry failed to download.
+  const tryList = async (
+    list: ScoredVideo[]
+  ): Promise<{ pexelsId: number; author: string | null; sourceUrl: string } | null> => {
+    if (list.length === 0) return null;
+    // First pass: only un-claimed videos. If all are already used, fall back to
+    // the full list (a reused clip is better than a failed scene).
+    const fresh = usedIds && usedIds.size > 0 ? list.filter((s) => !usedIds.has(s.video.id)) : list;
+    const ordered = fresh.length > 0 ? fresh : list;
+    const reusing = fresh.length === 0 && usedIds && usedIds.size > 0;
+    for (const s of ordered) {
+      // Atomic claim — between has() and add() no other Promise can run.
+      if (usedIds && usedIds.has(s.video.id) && !reusing) continue;
+      const file = pickBestVideoFile(s.video, { maxHeight });
+      if (!file) continue;
+      if (usedIds && !usedIds.has(s.video.id)) usedIds.add(s.video.id);
+
+      try {
+        await downloadPexelsVideo(file, outPath);
+        const author = s.video.user?.name ?? null;
+        const reusedTag = reusing ? " (reused — no fresh matches)" : "";
+        log(
+          runId,
+          "info",
+          `Pexels clip: id=${s.video.id} ${file.width}x${file.height} ${s.video.duration}s by ${author ?? "?"}${reusedTag} [${s.query} · match ${s.score.toFixed(2)}]`,
+          { stage: "animate", data: { pexelsId: s.video.id, author, sourceUrl: s.video.url } }
+        );
+        return { pexelsId: s.video.id, author, sourceUrl: s.video.url };
+      } catch (e) {
+        // Release the claim — this id failed, let another scene try it.
+        if (usedIds && !reusing) usedIds.delete(s.video.id);
+        lastErr = e;
+        const msg = e instanceof Error ? e.message : String(e);
+        log(runId, "warn", `Pexels download failed (${s.video.id}), trying next: ${msg.slice(0, 150)}`, {
+          stage: "animate",
+        });
+      }
+    }
+    return null;
+  };
+
+  // Try each query candidate in order; within a query, prefer the candidates
+  // whose own description actually matches what we searched for.
   for (let qi = 0; qi < candidates.length; qi++) {
     const query = candidates[qi];
     const tag = candidates.length > 1 ? ` (query ${qi + 1}/${candidates.length})` : "";
@@ -510,7 +626,8 @@ export async function acquireStockClipForScene(
 
     let videos: PexelsVideo[];
     try {
-      videos = await searchPexelsVideos(query, { orientation, minDuration, perPage: 15, runId });
+      // 30 per page (still ONE request) — a wider pool to score for relevance.
+      videos = await searchPexelsVideos(query, { orientation, minDuration, perPage: 30, runId });
     } catch (e) {
       lastErr = e;
       const msg = e instanceof Error ? e.message : String(e);
@@ -528,41 +645,49 @@ export async function acquireStockClipForScene(
       continue;
     }
 
-    // First pass: only un-claimed videos. If all candidates are already used,
-    // fall back to the full list (a reused clip is better than a failed scene).
-    const fresh = usedIds && usedIds.size > 0 ? videos.filter((v) => !usedIds.has(v.id)) : videos;
-    const ordered = fresh.length > 0 ? fresh : videos;
-    const reusing = fresh.length === 0 && usedIds && usedIds.size > 0;
+    const scored: ScoredVideo[] = videos.map((v) => {
+      const toks = pexelsSlugTokens(v.url);
+      return { video: v, score: relevanceScore(toks, queryTokenLists), hasDesc: toks.length > 0, query };
+    });
 
-    for (const video of ordered) {
-      // Atomic claim — between has() and add() no other Promise can run.
-      if (usedIds && usedIds.has(video.id) && !reusing) continue;
-      const file = pickBestVideoFile(video, { maxHeight });
-      if (!file) continue;
-      if (usedIds && !usedIds.has(video.id)) usedIds.add(video.id);
-
-      try {
-        await downloadPexelsVideo(file, outPath);
-        const author = video.user?.name ?? null;
-        const reusedTag = reusing ? " (reused — no fresh matches)" : "";
+    let pool: ScoredVideo[];
+    if (threshold > 0 && scored.some((s) => s.hasDesc)) {
+      // Stable sort: score desc; equal scores keep Pexels' own ranking.
+      const ranked = scored.slice().sort((a, b) => b.score - a.score);
+      pool = ranked.filter((s) => s.score >= threshold);
+      reserve.push(...ranked.filter((s) => s.score < threshold));
+      if (pool.length === 0) {
+        const best = ranked[0]?.score ?? 0;
         log(
           runId,
-          "info",
-          `Pexels clip: id=${video.id} ${file.width}x${file.height} ${video.duration}s by ${author ?? "?"}${reusedTag} [${query}]`,
-          { stage: "animate", data: { pexelsId: video.id, author, sourceUrl: video.url } }
+          "debug",
+          `No clip for "${query}" matches well enough (best ${best.toFixed(2)} < ${threshold}) — trying next query`,
+          { stage: "animate" }
         );
-        return { pexelsId: video.id, author, sourceUrl: video.url };
-      } catch (e) {
-        // Release the claim — this id failed, let another scene try it.
-        if (usedIds && !reusing) usedIds.delete(video.id);
-        lastErr = e;
-        const msg = e instanceof Error ? e.message : String(e);
-        log(runId, "warn", `Pexels download failed (${video.id}), trying next: ${msg.slice(0, 150)}`, {
-          stage: "animate",
-        });
+        continue;
       }
+    } else {
+      // Scoring off, or Pexels gave no usable descriptions — keep Pexels' order.
+      pool = scored;
     }
-    // Nothing in this query's results downloaded — fall through to next candidate.
+
+    const got = await tryList(pool);
+    if (got) return got;
+    // Every pool entry failed to download — fall through to the next query.
+  }
+
+  // Nothing met the threshold for ANY query (or the passing ones all failed to
+  // download) — use the best below-threshold candidate rather than failing.
+  if (reserve.length > 0) {
+    reserve.sort((a, b) => b.score - a.score);
+    log(
+      runId,
+      "warn",
+      `Scene #${scene.index}: no clip met the relevance threshold — using best available (match ${reserve[0].score.toFixed(2)})`,
+      { stage: "animate" }
+    );
+    const got = await tryList(reserve);
+    if (got) return got;
   }
 
   const tried = candidates.map((q) => `"${q}"`).join(", ");
@@ -605,7 +730,46 @@ export async function acquireStockPhotoForScene(
     throw new Error(`Scene #${scene.index}: empty Pexels query (no visual_queries)`);
   }
 
+  const threshold = relevanceThreshold();
+  const queryTokenLists = candidates.map(relevanceTokens);
+  type ScoredPhoto = { photo: PexelsPhoto; score: number; hasDesc: boolean; query: string };
+  const reserve: ScoredPhoto[] = [];
   let lastErr: unknown;
+
+  const tryList = async (
+    list: ScoredPhoto[]
+  ): Promise<{ pexelsId: number; photographer: string | null; sourceUrl: string } | null> => {
+    if (list.length === 0) return null;
+    const fresh = usedIds && usedIds.size > 0 ? list.filter((s) => !usedIds.has(s.photo.id)) : list;
+    const ordered = fresh.length > 0 ? fresh : list;
+    const reusing = fresh.length === 0 && usedIds && usedIds.size > 0;
+    for (const s of ordered) {
+      if (usedIds && usedIds.has(s.photo.id) && !reusing) continue;
+      if (usedIds && !usedIds.has(s.photo.id)) usedIds.add(s.photo.id);
+
+      const url = pickBestPhotoSrc(s.photo, maxHeight);
+      try {
+        await downloadPexelsPhoto(url, outPath);
+        const reusedTag = reusing ? " (reused — no fresh matches)" : "";
+        log(
+          runId,
+          "info",
+          `Pexels photo: id=${s.photo.id} ${s.photo.width}x${s.photo.height} by ${s.photo.photographer || "?"}${reusedTag} [${s.query} · match ${s.score.toFixed(2)}]`,
+          { stage: "animate", data: { pexelsId: s.photo.id, photographer: s.photo.photographer, sourceUrl: s.photo.url } }
+        );
+        return { pexelsId: s.photo.id, photographer: s.photo.photographer || null, sourceUrl: s.photo.url };
+      } catch (e) {
+        if (usedIds && !reusing) usedIds.delete(s.photo.id);
+        lastErr = e;
+        const msg = e instanceof Error ? e.message : String(e);
+        log(runId, "warn", `Pexels photo download failed (${s.photo.id}), trying next: ${msg.slice(0, 150)}`, {
+          stage: "animate",
+        });
+      }
+    }
+    return null;
+  };
+
   for (let qi = 0; qi < candidates.length; qi++) {
     const query = candidates[qi];
     const tag = candidates.length > 1 ? ` (query ${qi + 1}/${candidates.length})` : "";
@@ -613,7 +777,8 @@ export async function acquireStockPhotoForScene(
 
     let photos: PexelsPhoto[];
     try {
-      photos = await searchPexelsPhotos(query, { orientation, perPage: 15, runId });
+      // 30 per page (still ONE request) — a wider pool to score for relevance.
+      photos = await searchPexelsPhotos(query, { orientation, perPage: 30, runId });
     } catch (e) {
       lastErr = e;
       const msg = e instanceof Error ? e.message : String(e);
@@ -631,34 +796,45 @@ export async function acquireStockPhotoForScene(
       continue;
     }
 
-    const fresh = usedIds && usedIds.size > 0 ? photos.filter((p) => !usedIds.has(p.id)) : photos;
-    const ordered = fresh.length > 0 ? fresh : photos;
-    const reusing = fresh.length === 0 && usedIds && usedIds.size > 0;
+    // Photos describe themselves twice: the `alt` sentence AND the URL slug.
+    const scored: ScoredPhoto[] = photos.map((p) => {
+      const toks = [...new Set([...relevanceTokens(p.alt || ""), ...pexelsSlugTokens(p.url)])];
+      return { photo: p, score: relevanceScore(toks, queryTokenLists), hasDesc: toks.length > 0, query };
+    });
 
-    for (const photo of ordered) {
-      if (usedIds && usedIds.has(photo.id) && !reusing) continue;
-      if (usedIds && !usedIds.has(photo.id)) usedIds.add(photo.id);
-
-      const url = pickBestPhotoSrc(photo, maxHeight);
-      try {
-        await downloadPexelsPhoto(url, outPath);
-        const reusedTag = reusing ? " (reused — no fresh matches)" : "";
+    let pool: ScoredPhoto[];
+    if (threshold > 0 && scored.some((s) => s.hasDesc)) {
+      const ranked = scored.slice().sort((a, b) => b.score - a.score);
+      pool = ranked.filter((s) => s.score >= threshold);
+      reserve.push(...ranked.filter((s) => s.score < threshold));
+      if (pool.length === 0) {
+        const best = ranked[0]?.score ?? 0;
         log(
           runId,
-          "info",
-          `Pexels photo: id=${photo.id} ${photo.width}x${photo.height} by ${photo.photographer || "?"}${reusedTag} [${query}]`,
-          { stage: "animate", data: { pexelsId: photo.id, photographer: photo.photographer, sourceUrl: photo.url } }
+          "debug",
+          `No photo for "${query}" matches well enough (best ${best.toFixed(2)} < ${threshold}) — trying next query`,
+          { stage: "animate" }
         );
-        return { pexelsId: photo.id, photographer: photo.photographer || null, sourceUrl: photo.url };
-      } catch (e) {
-        if (usedIds && !reusing) usedIds.delete(photo.id);
-        lastErr = e;
-        const msg = e instanceof Error ? e.message : String(e);
-        log(runId, "warn", `Pexels photo download failed (${photo.id}), trying next: ${msg.slice(0, 150)}`, {
-          stage: "animate",
-        });
+        continue;
       }
+    } else {
+      pool = scored;
     }
+
+    const got = await tryList(pool);
+    if (got) return got;
+  }
+
+  if (reserve.length > 0) {
+    reserve.sort((a, b) => b.score - a.score);
+    log(
+      runId,
+      "warn",
+      `Scene #${scene.index}: no photo met the relevance threshold — using best available (match ${reserve[0].score.toFixed(2)})`,
+      { stage: "animate" }
+    );
+    const got = await tryList(reserve);
+    if (got) return got;
   }
 
   const tried = candidates.map((q) => `"${q}"`).join(", ");
